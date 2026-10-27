@@ -4,6 +4,22 @@
 import { db, guardarTodo } from './db.js';
 import { calcularNetoMes, calcularGastosMes, formatARS, obtenerMesActual } from './calculos.js';
 
+/**
+ * Sanitiza texto para prevenir inyecciones HTML y Stored XSS.
+ *
+ * @param {string|number} str
+ * @returns {string}
+ */
+export function escapeHTML(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 let chartDeseos = null;
 
 const MESES_NOMBRES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -410,7 +426,7 @@ export function renderizarDeseosYProyeccion() {
                 <div class="bg-amber-50 rounded-xl p-3 border border-amber-300 shadow-sm flex justify-between items-center">
                     <div>
                         <span class="text-[9px] text-amber-800 font-bold uppercase">3. Impacto de Deseo</span>
-                        <p class="text-xs font-extrabold text-amber-950 mt-0.5">${deseoDelMesConcepto} (-${formatARS(deseoDelMesMonto)})</p>
+                        <p class="text-xs font-extrabold text-amber-950 mt-0.5">${escapeHTML(deseoDelMesConcepto)} (-${formatARS(deseoDelMesMonto)})</p>
                     </div>
                     <span class="text-[9px] bg-amber-500 text-white font-bold px-2 py-0.5 rounded">Ejecutado</span>
                 </div>
@@ -471,7 +487,7 @@ export function renderizarDeseosYProyeccion() {
             <div class="space-y-1 border-t border-emerald-200/60 pt-2">
                 ${deseosCompradosLista.map(d => `
                     <div class="flex justify-between text-[11px] text-emerald-800">
-                        <span>• ${d.concepto} (${d.fechaCompra || 'Registrado'})</span>
+                        <span>• ${escapeHTML(d.concepto)} (${escapeHTML(d.fechaCompra || 'Registrado')})</span>
                         <span class="font-semibold">${d.moneda === 'USD' ? 'US$ ' + d.monto.toLocaleString('es-AR') : formatARS(d.costoARS)}</span>
                     </div>
                 `).join('')}
@@ -491,20 +507,20 @@ export function renderizarDeseosYProyeccion() {
             let fechaTexto = '';
 
             if (meta.confirmado) {
-                badge = `<span class="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full">🟢 Comprado · ${meta.fechaCompra || 'Registrado'}</span>`;
+                badge = `<span class="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full">🟢 Comprado · ${escapeHTML(meta.fechaCompra || 'Registrado')}</span>`;
                 fechaTexto = `Compra confirmada manualmente. Ya descontada de tu caja.`;
             } else if (meta.alcanzado && meta.mesKeyAlcanzado) {
                 const dist = diffEnMeses(mesNavegado, meta.mesKeyAlcanzado);
 
                 if (dist <= 0) {
-                    badge = `<span class="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full">🟡 Alcanzable · ${meta.mesAlcanzadoLabel}</span>`;
-                    fechaTexto = `Tu presupuesto alcanza para este deseo en <strong>${meta.mesAlcanzadoLabel}</strong> según la proyección.`;
+                    badge = `<span class="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full">🟡 Alcanzable · ${escapeHTML(meta.mesAlcanzadoLabel)}</span>`;
+                    fechaTexto = `Tu presupuesto alcanza para este deseo en <strong>${escapeHTML(meta.mesAlcanzadoLabel)}</strong> según la proyección.`;
                 } else if (dist === 1) {
                     badge = `<span class="bg-sky-100 text-sky-800 text-[10px] font-bold px-2 py-0.5 rounded-full">🔵 El mes que viene</span>`;
-                    fechaTexto = `Será alcanzable el mes que viene (<strong>${meta.mesAlcanzadoLabel}</strong>) manteniendo tu ritmo.`;
+                    fechaTexto = `Será alcanzable el mes que viene (<strong>${escapeHTML(meta.mesAlcanzadoLabel)}</strong>) manteniendo tu ritmo.`;
                 } else {
                     badge = `<span class="bg-sky-100 text-sky-800 text-[10px] font-bold px-2 py-0.5 rounded-full">🔵 En ${dist} meses</span>`;
-                    fechaTexto = `Será alcanzable en ${dist} meses (<strong>${meta.mesAlcanzadoLabel}</strong>) según la proyección.`;
+                    fechaTexto = `Será alcanzable en ${dist} meses (<strong>${escapeHTML(meta.mesAlcanzadoLabel)}</strong>) según la proyección.`;
                 }
             } else {
                 badge = `<span class="bg-rose-100 text-rose-800 text-[10px] font-bold px-2 py-0.5 rounded-full">🔴 +12 Meses</span>`;
@@ -518,12 +534,12 @@ export function renderizarDeseosYProyeccion() {
             const esPrimero = meta.prioridad === 1;
             const esUltimo = meta.prioridad === metasProcesadas.length;
             
-            const idStr = String(meta.id).replace(/'/g, "\\'");
+            const idStr = String(meta.id).replace(/'/g, "\\'").replace(/"/g, '&quot;');
             card.innerHTML = `
                 <div class="flex justify-between items-start gap-2">
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-2 flex-wrap">
-                            <span class="font-bold text-xs text-gray-800">#${meta.prioridad} ${meta.concepto}</span>
+                            <span class="font-bold text-xs text-gray-800">#${meta.prioridad} ${escapeHTML(meta.concepto)}</span>
                             ${badge}
                         </div>
                         <p class="text-xs text-gray-500 mt-1">Costo: <strong>${costoFormateado}</strong></p>
@@ -794,7 +810,7 @@ function renderizarLeyendaCortes(canvasEl, lineasCorte) {
     leyendaEl.innerHTML = lineasCorte.map(l => `
         <span class="inline-flex items-center gap-1 text-[10px] text-gray-600">
             <span style="display:inline-block;width:8px;height:8px;border-radius:9999px;background:${l.color};"></span>
-            ${l.label}
+            ${escapeHTML(l.label)}
         </span>
     `).join('');
 }

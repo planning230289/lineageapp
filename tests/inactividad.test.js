@@ -427,7 +427,7 @@ describe('descarga de respaldo y cierre en app.js', () => {
         );
     }
 
-    it('cerrarPorInactividad debe invocar descargarJson y completar el cierre de sesión', async () => {
+    it('cerrarPorInactividad no debe forzar la descarga de JSON y debe completar el cierre de sesión', async () => {
         const ordenEjecucion = [];
         const mocks = {
             document: {
@@ -435,7 +435,7 @@ describe('descarga de respaldo y cierre en app.js', () => {
             },
             db: { timestamp: 0 },
             auth: { currentUser: { uid: 'usr_test_123' } },
-            localStorage: { setItem: vi.fn() },
+            localStorage: { setItem: vi.fn(), removeItem: vi.fn(), getItem: vi.fn(() => null) },
             guardarYRenderizar: vi.fn().mockImplementation(async (motivo) => {
                 ordenEjecucion.push(`guardar:${motivo}`);
                 return { ok: true, destino: 'nube' };
@@ -457,32 +457,68 @@ describe('descarga de respaldo y cierre en app.js', () => {
         const cerrar = crearCerrarPorInactividad(mocks);
         await cerrar();
 
-        expect(mocks.descargarJson).toHaveBeenCalledTimes(1);
+        expect(mocks.descargarJson).not.toHaveBeenCalled();
         expect(mocks.bloquearSesionCripto).toHaveBeenCalledTimes(1);
         expect(mocks.authCerrarSesion).toHaveBeenCalledTimes(1);
         expect(mocks.mostrarPantallaLogin).toHaveBeenCalledTimes(1);
 
         // Verificar el orden estricto de seguridad:
-        // Primero guardado -> luego descarga JSON de respaldo -> luego bloqueo criptográfico -> auth logout -> login UI
+        // Primero guardado -> luego bloqueo criptográfico -> auth logout -> login UI
         expect(ordenEjecucion).toEqual([
             'guardar:cierre',
-            'descargarJson',
             'bloquearSesionCripto',
             'authCerrarSesion',
             'mostrarPantallaLogin'
         ]);
     });
 
-    it('un fallo en descargarJson no debe interrumpir el bloqueo ni el cierre de sesión', async () => {
+    it('cerrarPorInactividad debe limpiar finanzas_db_fallback y finanzas_db_<uid> si el usuario tiene cifrado activo', async () => {
+        const localItems = {
+            'cero_conocimiento_activo_usr_cifrado': 'true',
+            'finanzas_db_fallback': '{"datos":"sensibles"}',
+            'finanzas_db_usr_cifrado': '{"datos":"sensibles"}'
+        };
+        const removeItemSpy = vi.fn((k) => { delete localItems[k]; });
+        const setItemSpy = vi.fn();
+
+        const mocks = {
+            document: { getElementById: () => null },
+            db: { timestamp: 0 },
+            auth: { currentUser: { uid: 'usr_cifrado' } },
+            localStorage: {
+                getItem: vi.fn((k) => localItems[k] || null),
+                setItem: setItemSpy,
+                removeItem: removeItemSpy
+            },
+            guardarYRenderizar: vi.fn().mockResolvedValue({ ok: true }),
+            descargarJson: vi.fn(),
+            bloquearSesionCripto: vi.fn(),
+            authCerrarSesion: vi.fn().mockResolvedValue(),
+            mostrarPantallaLogin: vi.fn()
+        };
+
+        const cerrar = crearCerrarPorInactividad(mocks);
+        await cerrar();
+
+        // No debe guardar en texto plano en localStorage
+        expect(setItemSpy).not.toHaveBeenCalledWith('finanzas_db_fallback', expect.any(String));
+        expect(setItemSpy).not.toHaveBeenCalledWith('finanzas_db_usr_cifrado', expect.any(String));
+
+        // Debe limpiar ambos storages para prevenir fuga
+        expect(removeItemSpy).toHaveBeenCalledWith('finanzas_db_fallback');
+        expect(removeItemSpy).toHaveBeenCalledWith('finanzas_db_usr_cifrado');
+        expect(mocks.bloquearSesionCripto).toHaveBeenCalledTimes(1);
+        expect(mocks.authCerrarSesion).toHaveBeenCalledTimes(1);
+    });
+
+    it('un fallo en la persistencia remota no debe interrumpir el bloqueo ni el cierre de sesión', async () => {
         const mocks = {
             document: { getElementById: () => null },
             db: { timestamp: 0 },
             auth: { currentUser: { uid: 'usr_test_456' } },
-            localStorage: { setItem: vi.fn() },
-            guardarYRenderizar: vi.fn().mockResolvedValue({ ok: true }),
-            descargarJson: vi.fn().mockImplementation(() => {
-                throw new Error('Fallo simulado al descargar blob');
-            }),
+            localStorage: { setItem: vi.fn(), removeItem: vi.fn(), getItem: vi.fn(() => null) },
+            guardarYRenderizar: vi.fn().mockRejectedValue(new Error('Fallo de red al persistir')),
+            descargarJson: vi.fn(),
             bloquearSesionCripto: vi.fn(),
             authCerrarSesion: vi.fn().mockResolvedValue(),
             mostrarPantallaLogin: vi.fn()

@@ -191,6 +191,35 @@ export async function guardarConfiguracionCifrado(event = null, usuarioId = null
    2. MODAL: DESBLOQUEO DE FINANZAS (#modal-desbloquear-cifrado)
    ========================================================= */
 
+// Promesa en curso de la operación biométrica para evitar ejecuciones concurrentes
+let _promesaBiometriaActiva = null;
+
+/**
+ * Devuelve la promesa activa del desbloqueo biométrico automático si existe.
+ * @returns {Promise<boolean>}
+ */
+export function obtenerPromesaDesbloqueoAutomatico() {
+    return _promesaBiometriaActiva || Promise.resolve(false);
+}
+
+/**
+ * Muestra la sección de PIN y traslada suavemente el foco al input.
+ */
+export function mostrarFormularioPinYEnfocar() {
+    const seccionPin = document.getElementById('seccion-desbloquear-pin');
+    if (seccionPin) {
+        seccionPin.classList.remove('hidden');
+    }
+    const btnTogglePin = document.getElementById('btn-toggle-metodo-pin');
+    if (btnTogglePin) {
+        btnTogglePin.classList.add('hidden');
+    }
+    const inputPin = document.getElementById('input-desbloquear-pin');
+    if (inputPin && !inputPin.disabled) {
+        inputPin.focus();
+    }
+}
+
 /**
  * Abre el modal de desbloqueo de finanzas cifradas.
  *
@@ -209,6 +238,8 @@ export function abrirModalDesbloquearCifrado(opciones = {}) {
     const inputPin = document.getElementById('input-desbloquear-pin');
     const feedback = document.getElementById('feedback-desbloquear-cifrado');
     const contenedorBio = document.getElementById('contenedor-btn-biometria');
+    const seccionPin = document.getElementById('seccion-desbloquear-pin');
+    const btnTogglePin = document.getElementById('btn-toggle-metodo-pin');
 
     if (inputPin) inputPin.value = '';
     if (feedback) {
@@ -226,11 +257,36 @@ export function abrirModalDesbloquearCifrado(opciones = {}) {
         }
     }
 
+    if (seccionPin) {
+        if (tieneBio) {
+            // Presentar biometría como protagonista principal
+            seccionPin.classList.add('hidden');
+        } else {
+            seccionPin.classList.remove('hidden');
+        }
+    }
+
+    if (btnTogglePin) {
+        if (tieneBio) {
+            btnTogglePin.classList.remove('hidden');
+        } else {
+            btnTogglePin.classList.add('hidden');
+        }
+    }
+
     // Comprobar estado de fuerza bruta
     actualizarEstadoFuerzaBrutaUI();
 
     modal.classList.remove('hidden');
-    if (inputPin) inputPin.focus();
+
+    if (tieneBio) {
+        // Disparar inmediatamente de forma automática el prompt biométrico
+        desbloquearConBiometria().catch((err) => {
+            console.warn('[CifradoUI] Prompt biométrico automático no completado:', err);
+        });
+    } else {
+        if (inputPin) inputPin.focus();
+    }
 }
 
 /**
@@ -327,49 +383,70 @@ export async function desbloquearConPin(event = null) {
 
 /**
  * Ejecuta el desbloqueo biométrico automático o al pulsar el botón.
+ * Reutiliza cualquier intento en curso para no disparar prompts concurrentes ni callbacks duplicados.
  *
  * @returns {Promise<boolean>}
  */
-export async function desbloquearConBiometriaUI() {
-    const feedback = document.getElementById('feedback-desbloquear-cifrado');
-    const usuarioId = _contextoDesbloqueo.usuarioId;
-    const salt = _contextoDesbloqueo.salt;
-
-    if (!usuarioId) {
-        mostrarFeedback(feedback, 'Usuario no identificado para biometría.', 'error');
-        return false;
+export async function desbloquearConBiometria() {
+    if (estaSesionDesbloqueada()) {
+        return true;
+    }
+    if (_promesaBiometriaActiva) {
+        return _promesaBiometriaActiva;
     }
 
-    try {
-        mostrarFeedback(feedback, 'Coloca tu huella o usa Face ID...', 'info');
-        await autenticarConBiometria(usuarioId);
+    _promesaBiometriaActiva = (async () => {
+        const feedback = document.getElementById('feedback-desbloquear-cifrado');
+        const usuarioId = _contextoDesbloqueo.usuarioId;
+        const salt = _contextoDesbloqueo.salt;
 
-        const pin = recuperarPinBiometricoProtegido(usuarioId);
-        if (!pin) {
-            mostrarFeedback(feedback, 'PIN biométrico no disponible. Ingrésalo manualmente.', 'alerta');
+        if (!usuarioId) {
+            mostrarFeedback(feedback, 'Usuario no identificado para biometría.', 'error');
+            mostrarFormularioPinYEnfocar();
             return false;
         }
 
-        const clave = await derivarClave(pin, salt);
-        establecerClaveActiva(clave, pin, salt, _contextoDesbloqueo.usuarioId);
-        reiniciarIntentosFallidos();
+        try {
+            mostrarFeedback(feedback, 'Coloca tu huella o usa Face ID...', 'info');
+            await autenticarConBiometria(usuarioId);
 
-        mostrarFeedback(feedback, '¡Biometría confirmada! Desbloqueando...', 'exito');
-
-        setTimeout(() => {
-            cerrarModalDesbloquearCifrado();
-            if (typeof _contextoDesbloqueo.alDesbloquear === 'function') {
-                _contextoDesbloqueo.alDesbloquear(clave);
+            const pin = recuperarPinBiometricoProtegido(usuarioId);
+            if (!pin) {
+                mostrarFeedback(feedback, 'PIN biométrico no disponible. Ingrésalo manualmente.', 'alerta');
+                mostrarFormularioPinYEnfocar();
+                return false;
             }
-        }, 400);
 
-        return true;
-    } catch (e) {
-        console.warn('[CifradoUI] Autenticación biométrica no completada:', e);
-        mostrarFeedback(feedback, 'Biometría no completada. Ingresa tu PIN numérico.', 'alerta');
-        return false;
+            const clave = await derivarClave(pin, salt);
+            establecerClaveActiva(clave, pin, salt, _contextoDesbloqueo.usuarioId);
+            reiniciarIntentosFallidos();
+
+            mostrarFeedback(feedback, '¡Biometría confirmada! Desbloqueando...', 'exito');
+
+            setTimeout(() => {
+                cerrarModalDesbloquearCifrado();
+                if (typeof _contextoDesbloqueo.alDesbloquear === 'function') {
+                    _contextoDesbloqueo.alDesbloquear(clave);
+                }
+            }, 400);
+
+            return true;
+        } catch (e) {
+            console.warn('[CifradoUI] Autenticación biométrica no completada:', e);
+            mostrarFeedback(feedback, 'Biometría no completada o cancelada. Ingresa tu PIN numérico.', 'alerta');
+            mostrarFormularioPinYEnfocar();
+            return false;
+        }
+    })();
+
+    try {
+        return await _promesaBiometriaActiva;
+    } finally {
+        _promesaBiometriaActiva = null;
     }
 }
+
+export const desbloquearConBiometriaUI = desbloquearConBiometria;
 
 /**
  * Maneja la acción de cancelar en el modal de desbloqueo.
@@ -494,4 +571,14 @@ function mostrarFeedback(contenedor, mensaje, tipo = 'info') {
     } else {
         contenedor.classList.add('bg-indigo-50', 'text-indigo-700', 'border', 'border-indigo-200');
     }
+}
+
+if (typeof window !== 'undefined') {
+    window.desbloquearConBiometriaUI = desbloquearConBiometriaUI;
+    window.mostrarFormularioPinYEnfocar = mostrarFormularioPinYEnfocar;
+    window.desbloquearConPin = desbloquearConPin;
+    window.cancelarDesbloqueoOCerrar = cancelarDesbloqueoOCerrar;
+    window.tecladoPinPresionar = tecladoPinPresionar;
+    window.tecladoPinBorrar = tecladoPinBorrar;
+    window.tecladoPinLimpiar = tecladoPinLimpiar;
 }

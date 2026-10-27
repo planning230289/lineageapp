@@ -77,7 +77,9 @@ import {
     abrirModalDesbloquearCifrado,
     cerrarModalDesbloquearCifrado,
     desbloquearConPin,
+    desbloquearConBiometria,
     desbloquearConBiometriaUI,
+    mostrarFormularioPinYEnfocar,
     cancelarDesbloqueoOCerrar,
     tecladoPinPresionar,
     tecladoPinBorrar,
@@ -289,14 +291,30 @@ export async function cerrarPorInactividad() {
     const estado = document.getElementById('debug-app-status');
     if (estado) estado.textContent = 'Sesión cerrada por inactividad. Se guardaron los cambios.';
 
-    // 1. Guardado local prioritario e inmediato con timestamp
+    const uid = auth.currentUser?.uid;
+    const tieneCifrado = Boolean(
+        uid && typeof localStorage !== 'undefined' && (
+            localStorage.getItem(`cero_conocimiento_activo_${uid}`) === 'true' ||
+            localStorage.getItem(`cero_conocimiento_salt_${uid}`)
+        )
+    );
+
+    // 1. Guardado local prioritario e inmediato con timestamp (si no tiene cifrado activo)
     const ahora = Date.now();
     try {
         db.timestamp = ahora;
         if (typeof localStorage !== 'undefined') {
-            localStorage.setItem('finanzas_db_fallback', JSON.stringify(db));
-            if (auth.currentUser?.uid) {
-                localStorage.setItem(`finanzas_db_${auth.currentUser.uid}`, JSON.stringify({ db, timestamp: ahora }));
+            if (tieneCifrado) {
+                // Prevenir fuga de datos financieros sin cifrar en reposo
+                localStorage.removeItem('finanzas_db_fallback');
+                if (uid) {
+                    localStorage.removeItem(`finanzas_db_${uid}`);
+                }
+            } else {
+                localStorage.setItem('finanzas_db_fallback', JSON.stringify(db));
+                if (uid) {
+                    localStorage.setItem(`finanzas_db_${uid}`, JSON.stringify({ db, timestamp: ahora }));
+                }
             }
         }
     } catch (e) {
@@ -313,20 +331,21 @@ export async function cerrarPorInactividad() {
         console.warn('[Inactividad] Guardado remoto omitido o con demora, copia local preservada:', errNube);
     }
 
-    // 3. Confirmar que la copia local más reciente permanezca intacta
+    // 3. Confirmar persistencia local segura
     try {
-        if (auth.currentUser?.uid && typeof localStorage !== 'undefined') {
-            localStorage.setItem(`finanzas_db_${auth.currentUser.uid}`, JSON.stringify({ db, timestamp: Date.now() }));
+        if (typeof localStorage !== 'undefined') {
+            if (tieneCifrado) {
+                localStorage.removeItem('finanzas_db_fallback');
+                if (uid) {
+                    localStorage.removeItem(`finanzas_db_${uid}`);
+                }
+            } else if (uid) {
+                localStorage.setItem(`finanzas_db_${uid}`, JSON.stringify({ db, timestamp: Date.now() }));
+            }
         }
     } catch (_) {}
 
-    // 4. Descarga de respaldo JSON al cerrar por inactividad
-    try {
-        descargarJson();
-    } catch (errDescarga) {
-        console.warn('[Inactividad] Error al descargar JSON de respaldo:', errDescarga);
-    }
-
+    // 4. Bloqueo criptográfico y cierre seguro sin descarga automática forzada
     bloquearSesionCripto();
     await authCerrarSesion();
     mostrarPantallaLogin();
@@ -366,14 +385,29 @@ export async function handleCerrarSesion() {
     } catch (_) {}
     detenerInactividad();
 
-    // 1. Guardado local prioritario e inmediato con timestamp
+    const uid = auth.currentUser?.uid;
+    const tieneCifrado = Boolean(
+        uid && typeof localStorage !== 'undefined' && (
+            localStorage.getItem(`cero_conocimiento_activo_${uid}`) === 'true' ||
+            localStorage.getItem(`cero_conocimiento_salt_${uid}`)
+        )
+    );
+
+    // 1. Guardado local prioritario e inmediato con timestamp (si no tiene cifrado activo)
     const ahora = Date.now();
     try {
         db.timestamp = ahora;
         if (typeof localStorage !== 'undefined') {
-            localStorage.setItem('finanzas_db_fallback', JSON.stringify(db));
-            if (auth.currentUser?.uid) {
-                localStorage.setItem(`finanzas_db_${auth.currentUser.uid}`, JSON.stringify({ db, timestamp: ahora }));
+            if (tieneCifrado) {
+                localStorage.removeItem('finanzas_db_fallback');
+                if (uid) {
+                    localStorage.removeItem(`finanzas_db_${uid}`);
+                }
+            } else {
+                localStorage.setItem('finanzas_db_fallback', JSON.stringify(db));
+                if (uid) {
+                    localStorage.setItem(`finanzas_db_${uid}`, JSON.stringify({ db, timestamp: ahora }));
+                }
             }
         }
     } catch (e) {
@@ -389,6 +423,14 @@ export async function handleCerrarSesion() {
     } catch (errNube) {
         console.warn('[CerrarSesion] Guardado remoto con demora u omitido:', errNube);
     }
+
+    // Asegurar limpieza de datos sensibles si tiene cifrado
+    try {
+        if (tieneCifrado && typeof localStorage !== 'undefined') {
+            localStorage.removeItem('finanzas_db_fallback');
+            if (uid) localStorage.removeItem(`finanzas_db_${uid}`);
+        }
+    } catch (_) {}
 
     // 3. Desconectar sesión y destruir claves en memoria volátil
     try {
@@ -3426,6 +3468,7 @@ window.toggleMostrarNuevoPin = handleToggleMostrarNuevoPin;
 window.toggleMostrarConfirmarPin = handleToggleMostrarConfirmarPin;
 window.toggleMostrarDesbloquearPin = handleToggleMostrarDesbloquearPin;
 window.desbloquearConBiometriaUI = handleDesbloquearConBiometriaUI;
+window.mostrarFormularioPinYEnfocar = mostrarFormularioPinYEnfocar;
 window.desbloquearConPin = handleDesbloquearConPin;
 window.tecladoPinPresionar = handleTecladoPinPresionar;
 window.tecladoPinBorrar = handleTecladoPinBorrar;

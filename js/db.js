@@ -241,16 +241,32 @@ export async function iniciarSesionGoogle() {
 }
 
 export function cerrarSesion() {
-    const ahora = Date.now();
+    const uid = auth.currentUser?.uid;
+    const tieneCifradoActivo = Boolean(
+        uid && typeof localStorage !== 'undefined' && (
+            localStorage.getItem(`cero_conocimiento_activo_${uid}`) === 'true' ||
+            localStorage.getItem(`cero_conocimiento_salt_${uid}`)
+        )
+    );
+
     try {
         if (typeof localStorage !== 'undefined') {
-            localStorage.setItem('finanzas_db_fallback', JSON.stringify(db));
-            if (auth.currentUser?.uid) {
-                localStorage.setItem(`finanzas_db_${auth.currentUser.uid}`, JSON.stringify({ db, timestamp: ahora }));
+            if (tieneCifradoActivo) {
+                // Prevenir fuga de datos financieros sin cifrar en reposo
+                localStorage.removeItem('finanzas_db_fallback');
+                if (uid) {
+                    localStorage.removeItem(`finanzas_db_${uid}`);
+                }
+            } else {
+                const ahora = Date.now();
+                localStorage.setItem('finanzas_db_fallback', JSON.stringify(db));
+                if (uid) {
+                    localStorage.setItem(`finanzas_db_${uid}`, JSON.stringify({ db, timestamp: ahora }));
+                }
             }
         }
     } catch (e) {
-        console.warn('[db] Error guardando copia local al cerrar sesión:', e);
+        console.warn('[db] Error gestionando copia local al cerrar sesión:', e);
     }
     return signOut(auth).then(() => {
         if (typeof window !== 'undefined' && window.location && typeof window.location.reload === 'function') {

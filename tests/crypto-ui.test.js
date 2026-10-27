@@ -8,7 +8,10 @@ import {
     abrirModalDesbloquearCifrado,
     cerrarModalDesbloquearCifrado,
     desbloquearConPin,
+    desbloquearConBiometria,
     desbloquearConBiometriaUI,
+    mostrarFormularioPinYEnfocar,
+    obtenerPromesaDesbloqueoAutomatico,
     cancelarDesbloqueoOCerrar,
     tecladoPinPresionar,
     tecladoPinBorrar,
@@ -56,16 +59,19 @@ describe('Interfaz y Modales Cero Conocimiento (Fase 2 - UI)', () => {
             <div id="modal-desbloquear-cifrado" class="hidden">
                 <div id="contenedor-btn-biometria" class="hidden">
                     <button id="btn-desbloquear-biometria"></button>
+                    <button id="btn-toggle-metodo-pin"></button>
                 </div>
-                <form id="form-desbloquear-cifrado">
-                    <input type="password" id="input-desbloquear-pin" />
-                    <button id="btn-toggle-desbloquear-pin">
-                        <i id="icon-toggle-desbloquear-pin" class="fa-solid fa-eye"></i>
-                    </button>
-                    <div id="feedback-desbloquear-cifrado" class="hidden"></div>
-                    <button type="submit" id="btn-confirmar-desbloqueo">Desbloquear</button>
-                    <button type="button" id="btn-cancelar-desbloqueo">Cancelar</button>
-                </form>
+                <div id="feedback-desbloquear-cifrado" class="hidden"></div>
+                <div id="seccion-desbloquear-pin">
+                    <form id="form-desbloquear-cifrado">
+                        <input type="password" id="input-desbloquear-pin" />
+                        <button id="btn-toggle-desbloquear-pin">
+                            <i id="icon-toggle-desbloquear-pin" class="fa-solid fa-eye"></i>
+                        </button>
+                        <button type="submit" id="btn-confirmar-desbloqueo">Desbloquear</button>
+                        <button type="button" id="btn-cancelar-desbloqueo">Cancelar</button>
+                    </form>
+                </div>
             </div>
         `;
     });
@@ -304,6 +310,84 @@ describe('Interfaz y Modales Cero Conocimiento (Fase 2 - UI)', () => {
 
             cancelarDesbloqueoOCerrar();
             expect(alCancelar).toHaveBeenCalledTimes(1);
+        });
+
+        it('debe disparar automáticamente la biometría al abrir modal si tiene biometría registrada', async () => {
+            const salt = generarSalt();
+            const callback = vi.fn();
+
+            guardarCredencialBiometrica('usr_auto_bio', { credentialId: 'AQIDBA==' });
+            guardarPinBiometricoProtegido('usr_auto_bio', '1234');
+
+            globalThis.navigator = {
+                credentials: {
+                    get: vi.fn().mockResolvedValue({ id: 'ok' })
+                }
+            };
+
+            // Al abrir, debe disparar automáticamente la biometría
+            abrirModalDesbloquearCifrado({
+                usuarioId: 'usr_auto_bio',
+                salt,
+                alDesbloquear: callback
+            });
+
+            await obtenerPromesaDesbloqueoAutomatico();
+            await vi.runAllTimersAsync();
+
+            expect(globalThis.navigator.credentials.get).toHaveBeenCalledTimes(1);
+            expect(estaSesionDesbloqueada()).toBe(true);
+            expect(callback).toHaveBeenCalledTimes(1);
+        });
+
+        it('si la biometría automática falla o se cancela, debe mostrar sección de PIN y enfocar el input', async () => {
+            const salt = generarSalt();
+            const input = document.getElementById('input-desbloquear-pin');
+            const focusSpy = vi.spyOn(input, 'focus');
+            const seccionPin = document.getElementById('seccion-desbloquear-pin');
+            const feedback = document.getElementById('feedback-desbloquear-cifrado');
+
+            guardarCredencialBiometrica('usr_bio_fail', { credentialId: 'AQIDBA==' });
+            guardarPinBiometricoProtegido('usr_bio_fail', '1234');
+
+            // Simular fallo o cancelación en navigator.credentials.get
+            globalThis.navigator = {
+                credentials: {
+                    get: vi.fn().mockRejectedValue(new Error('User cancelled'))
+                }
+            };
+
+            abrirModalDesbloquearCifrado({
+                usuarioId: 'usr_bio_fail',
+                salt
+            });
+
+            // Inicialmente la sección de PIN está oculta por ser biometría protagonista
+            expect(seccionPin.classList.contains('hidden')).toBe(true);
+
+            await obtenerPromesaDesbloqueoAutomatico();
+            await vi.runAllTimersAsync();
+
+            // Tras el fallo, la sección de PIN debe desocultarse, mostrar advertencia y enfocar input
+            expect(seccionPin.classList.contains('hidden')).toBe(false);
+            expect(feedback.textContent).toContain('Biometría no completada o cancelada');
+            expect(focusSpy).toHaveBeenCalled();
+        });
+
+        it('mostrarFormularioPinYEnfocar debe desocultar sección de PIN y dar foco al input', () => {
+            const seccionPin = document.getElementById('seccion-desbloquear-pin');
+            const btnTogglePin = document.getElementById('btn-toggle-metodo-pin');
+            const input = document.getElementById('input-desbloquear-pin');
+            const focusSpy = vi.spyOn(input, 'focus');
+
+            seccionPin.classList.add('hidden');
+            btnTogglePin.classList.remove('hidden');
+
+            mostrarFormularioPinYEnfocar();
+
+            expect(seccionPin.classList.contains('hidden')).toBe(false);
+            expect(btnTogglePin.classList.contains('hidden')).toBe(true);
+            expect(focusSpy).toHaveBeenCalled();
         });
     });
 });

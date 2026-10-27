@@ -83,6 +83,10 @@ describe('Fase 1: Desensibilización de Drag & Drop y Scroll Táctil en Deseos',
         const MESES_NOMBRES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
         const MESES_CORTOS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
+        const fnEscape = extraerFuncion('escapeHTML', 'exportada');
+        const fnParseMes = extraerFuncion('parseMesLargoAKey', 'declarada');
+        const fnFormatMes = extraerFuncion('formatMesLargo', 'declarada');
+        const fnClaveMes = extraerFuncion('claveMesHoy', 'declarada');
         const fnCodigo = extraerFuncion('renderizarDeseosYProyeccion', 'exportada');
 
         renderizarDeseosFn = new Function(
@@ -90,6 +94,10 @@ describe('Fase 1: Desensibilización de Drag & Drop y Scroll Táctil en Deseos',
             'renderizarLeyendaCortes', 'MESES_NOMBRES', 'MESES_CORTOS', 'window', 'document',
             `"use strict";
             let chartDeseos = null;
+            ${fnEscape};
+            ${fnParseMes};
+            ${fnFormatMes};
+            ${fnClaveMes};
             ${fnCodigo};
             return renderizarDeseosYProyeccion;`
         )(
@@ -262,6 +270,43 @@ describe('Fase 1: Desensibilización de Drag & Drop y Scroll Táctil en Deseos',
             expect(card.style.transform).toBe('');
             expect(card.classList.contains('opacity-50')).toBe(false);
             expect(window.moverDeseo).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('Fase 2: Blindaje de Ciberseguridad contra Stored XSS', () => {
+        it('debe sanitizar propiedades dinámicas con escapeHTML neutralizando scripts e imágenes maliciosas', () => {
+            dbMock.deseos = [
+                {
+                    id: 'deseo-xss-1',
+                    concepto: '<script>alert("xss")</script><img src=x onerror=alert(1)>Deseo Seguro',
+                    moneda: 'ARS',
+                    monto: 50000,
+                    comprado: false
+                },
+                {
+                    id: 'deseo-xss-2',
+                    concepto: 'Compra "confirmada" & <peligro>',
+                    fechaCompra: '2026-10-01<script>bad()</script>',
+                    moneda: 'ARS',
+                    monto: 25000,
+                    comprado: true
+                }
+            ];
+
+            renderizarDeseosFn();
+
+            const contenedor = document.getElementById('lista-deseos-proyectados');
+            const htmlGenerado = contenedor.innerHTML;
+
+            // Verificar que los tags maliciosos no se insertan en el DOM
+            expect(contenedor.querySelectorAll('script').length).toBe(0);
+            expect(contenedor.querySelectorAll('img[onerror]').length).toBe(0);
+
+            // Verificar que se hayan escapado las entidades HTML correctamente en el DOM
+            expect(htmlGenerado).toContain('&lt;script&gt;alert("xss")&lt;/script&gt;');
+            expect(htmlGenerado).toContain('&lt;img src=x onerror=alert(1)&gt;Deseo Seguro');
+            expect(htmlGenerado).toContain('Compra "confirmada" &amp; &lt;peligro&gt;');
+            expect(htmlGenerado).toContain('2026-10-01&lt;script&gt;bad()&lt;/script&gt;');
         });
     });
 });

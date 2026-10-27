@@ -30,7 +30,7 @@
    ========================================================= */
 
 /** Versión del código, visible para la persona. */
-export const APP_VERSION = '15.5.0';
+export const APP_VERSION = '15.6.0';
 
 /**
  * Versión de la forma de los datos.
