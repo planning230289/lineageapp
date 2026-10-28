@@ -52,7 +52,9 @@ export function piezasVersion() {
  * @returns {boolean} true si se escribió al menos una superficie
  */
 export function pintarVersionApp(documento) {
-    const doc = documento || (typeof document !== 'undefined' ? document : null);
+    const doc = (documento && typeof documento.getElementById === 'function')
+        ? documento
+        : (typeof document !== 'undefined' ? document : null);
     if (!doc) return false;
 
     const piezas = piezasVersion();

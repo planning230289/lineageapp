@@ -133,6 +133,12 @@ describe('pintarVersionApp', () => {
             .toBe(`Mis Finanzas v${APP_VERSION}`);
     });
 
+    it('debe tolerar un argumento timestamp numérico (ej. de requestAnimationFrame) sin lanzar TypeError', () => {
+        expect(() => pintarVersionApp(1425.8)).not.toThrow();
+        expect(document.getElementById('app-title-header').textContent)
+            .toBe(`Mis Finanzas v${APP_VERSION}`);
+    });
+
     it('debe escribir el título aunque no exista ningún otro elemento', () => {
         // El title no depende de un id, así que es lo último que se
         // pierde si el HTML cambia de forma.

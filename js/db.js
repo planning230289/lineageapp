@@ -587,7 +587,7 @@ if (document.readyState === 'loading') {
    número vuelve a escribirse en la primera pintura. Es idempotente,
    así que repetirlo no hace daño. */
 if (typeof requestAnimationFrame === 'function') {
-    requestAnimationFrame(pintarVersionApp);
+    requestAnimationFrame(() => pintarVersionApp());
 }
 
 /* =========================================================
