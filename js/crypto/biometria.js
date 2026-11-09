@@ -180,8 +180,7 @@ export async function autenticarConBiometria(usuarioId, credentialId = null, cha
         allowCredentials: [
             {
                 id: rawIdBytes,
-                type: 'public-key',
-                transports: ['internal']
+                type: 'public-key'
             }
         ],
         userVerification: 'required',

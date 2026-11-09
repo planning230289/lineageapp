@@ -340,11 +340,12 @@ describe('Interfaz y Modales Cero Conocimiento (Fase 2 - UI)', () => {
             expect(callback).toHaveBeenCalledTimes(1);
         });
 
-        it('si la biometría automática falla o se cancela, debe mostrar sección de PIN y enfocar el input', async () => {
+        it('si la biometría automática inicial falla o se cancela, debe mantener la interfaz biométrica activa y no forzar salto a PIN', async () => {
             const salt = generarSalt();
             const input = document.getElementById('input-desbloquear-pin');
             const focusSpy = vi.spyOn(input, 'focus');
             const seccionPin = document.getElementById('seccion-desbloquear-pin');
+            const contenedorBio = document.getElementById('contenedor-btn-biometria');
             const feedback = document.getElementById('feedback-desbloquear-cifrado');
 
             guardarCredencialBiometrica('usr_bio_fail', { credentialId: 'AQIDBA==' });
@@ -364,11 +365,49 @@ describe('Interfaz y Modales Cero Conocimiento (Fase 2 - UI)', () => {
 
             // Inicialmente la sección de PIN está oculta por ser biometría protagonista
             expect(seccionPin.classList.contains('hidden')).toBe(true);
+            expect(contenedorBio.classList.contains('hidden')).toBe(false);
 
             await obtenerPromesaDesbloqueoAutomatico();
             await vi.runAllTimersAsync();
 
-            // Tras el fallo, la sección de PIN debe desocultarse, mostrar advertencia y enfocar input
+            // Tras el fallo del auto-prompt, NO se salta forzadamente a PIN: la huella permanece lista para tocar
+            expect(seccionPin.classList.contains('hidden')).toBe(true);
+            expect(contenedorBio.classList.contains('hidden')).toBe(false);
+            expect(feedback.textContent).toContain('Toca el botón para escanear tu huella');
+            expect(focusSpy).not.toHaveBeenCalled();
+        });
+
+        it('si el usuario pulsa directamente el botón de biometría y falla, entonces sí muestra advertencia y enfoca PIN', async () => {
+            const salt = generarSalt();
+            const input = document.getElementById('input-desbloquear-pin');
+            const focusSpy = vi.spyOn(input, 'focus');
+            const seccionPin = document.getElementById('seccion-desbloquear-pin');
+            const feedback = document.getElementById('feedback-desbloquear-cifrado');
+
+            guardarCredencialBiometrica('usr_bio_direct_fail', { credentialId: 'AQIDBA==' });
+            guardarPinBiometricoProtegido('usr_bio_direct_fail', '1234');
+
+            globalThis.navigator = {
+                credentials: {
+                    get: vi.fn().mockRejectedValue(new Error('Hardware error'))
+                }
+            };
+
+            abrirModalDesbloquearCifrado({
+                usuarioId: 'usr_bio_direct_fail',
+                salt
+            });
+
+            // Esperar el auto-prompt inicial
+            await obtenerPromesaDesbloqueoAutomatico();
+            await vi.runAllTimersAsync();
+
+            // Ahora el usuario pulsa directamente el botón de biometría
+            const promesa = desbloquearConBiometriaUI();
+            const exito = await promesa;
+            await vi.runAllTimersAsync();
+
+            expect(exito).toBe(false);
             expect(seccionPin.classList.contains('hidden')).toBe(false);
             expect(feedback.textContent).toContain('Biometría no completada o cancelada');
             expect(focusSpy).toHaveBeenCalled();

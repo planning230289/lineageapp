@@ -68,8 +68,9 @@ export async function abrirModalConfigurarCifrado(usuarioId = null) {
         const disponible = await esBiometriaDisponible();
         if (disponible) {
             contenedorBio.classList.remove('hidden');
-            if (checkBio && usuarioId) {
-                checkBio.checked = tieneBiometriaRegistrada(usuarioId);
+            if (checkBio) {
+                // Si el dispositivo lo soporta, marcar activo por defecto
+                checkBio.checked = usuarioId ? (tieneBiometriaRegistrada(usuarioId) || true) : true;
             }
         } else {
             contenedorBio.classList.add('hidden');
@@ -249,30 +250,21 @@ export function abrirModalDesbloquearCifrado(opciones = {}) {
 
     // Comprobar si el usuario tiene biometría previamente registrada en este dispositivo
     const tieneBio = Boolean(opciones.usuarioId && tieneBiometriaRegistrada(opciones.usuarioId));
-    if (contenedorBio) {
-        if (tieneBio) {
-            contenedorBio.classList.remove('hidden');
-        } else {
-            contenedorBio.classList.add('hidden');
-        }
-    }
 
-    if (seccionPin) {
-        if (tieneBio) {
-            // Presentar biometría como protagonista principal
-            seccionPin.classList.add('hidden');
-        } else {
-            seccionPin.classList.remove('hidden');
+    const aplicarVisibilidadBio = (mostrar) => {
+        if (contenedorBio) {
+            contenedorBio.classList.toggle('hidden', !mostrar);
         }
-    }
+        if (seccionPin) {
+            seccionPin.classList.toggle('hidden', mostrar);
+        }
+        if (btnTogglePin) {
+            btnTogglePin.classList.toggle('hidden', !mostrar);
+        }
+    };
 
-    if (btnTogglePin) {
-        if (tieneBio) {
-            btnTogglePin.classList.remove('hidden');
-        } else {
-            btnTogglePin.classList.add('hidden');
-        }
-    }
+    // Si ya tiene biometría vinculada, presentarla en primer plano de forma inmediata
+    aplicarVisibilidadBio(tieneBio);
 
     // Comprobar estado de fuerza bruta
     actualizarEstadoFuerzaBrutaUI();
@@ -280,12 +272,24 @@ export function abrirModalDesbloquearCifrado(opciones = {}) {
     modal.classList.remove('hidden');
 
     if (tieneBio) {
-        // Disparar inmediatamente de forma automática el prompt biométrico
-        desbloquearConBiometria().catch((err) => {
+        // Disparar de forma automática el prompt biométrico inicial (esInteraccionUsuario = false)
+        desbloquearConBiometria(false).catch((err) => {
             console.warn('[CifradoUI] Prompt biométrico automático no completado:', err);
         });
     } else {
-        if (inputPin) inputPin.focus();
+        // Si no tiene credencial registrada en este navegador, verificar si el hardware soporta biometría
+        esBiometriaDisponible().then((disponible) => {
+            if (disponible) {
+                aplicarVisibilidadBio(true);
+                if (feedback) {
+                    mostrarFeedback(feedback, 'Toca el botón para ingresar con huella o ingresa tu PIN.', 'info');
+                }
+            } else if (inputPin) {
+                inputPin.focus();
+            }
+        }).catch(() => {
+            if (inputPin) inputPin.focus();
+        });
     }
 }
 
@@ -354,6 +358,21 @@ export async function desbloquearConPin(event = null) {
         establecerClaveActiva(clave, pin, salt, _contextoDesbloqueo.usuarioId);
         reiniciarIntentosFallidos();
 
+        // Si el hardware soporta biometría y aún no está vinculada, invitar a registrarla
+        const uidActual = _contextoDesbloqueo.usuarioId;
+        if (uidActual && !tieneBiometriaRegistrada(uidActual)) {
+            esBiometriaDisponible().then((disp) => {
+                if (disp && typeof window !== 'undefined' && typeof window.confirm === 'function') {
+                    const deseaActivar = window.confirm('¿Deseas activar el acceso con Huella dactilar / Face ID para desbloquear automáticamente las próximas veces?');
+                    if (deseaActivar) {
+                        registrarBiometria(uidActual)
+                            .then(() => guardarPinBiometricoProtegido(uidActual, pin))
+                            .catch((err) => console.warn('[CifradoUI] Registro biométrico post-PIN cancelado u omitido:', err));
+                    }
+                }
+            }).catch(() => {});
+        }
+
         mostrarFeedback(feedback, '¡Desbloqueado con éxito!', 'exito');
 
         setTimeout(() => {
@@ -387,7 +406,7 @@ export async function desbloquearConPin(event = null) {
  *
  * @returns {Promise<boolean>}
  */
-export async function desbloquearConBiometria() {
+export async function desbloquearConBiometria(esInteraccionUsuario = true) {
     if (estaSesionDesbloqueada()) {
         return true;
     }
@@ -402,6 +421,12 @@ export async function desbloquearConBiometria() {
 
         if (!usuarioId) {
             mostrarFeedback(feedback, 'Usuario no identificado para biometría.', 'error');
+            mostrarFormularioPinYEnfocar();
+            return false;
+        }
+
+        if (!tieneBiometriaRegistrada(usuarioId)) {
+            mostrarFeedback(feedback, 'Primero ingresa tu PIN para vincular tu huella a este dispositivo.', 'info');
             mostrarFormularioPinYEnfocar();
             return false;
         }
@@ -433,6 +458,12 @@ export async function desbloquearConBiometria() {
             return true;
         } catch (e) {
             console.warn('[CifradoUI] Autenticación biométrica no completada:', e);
+            if (!esInteraccionUsuario) {
+                // El auto-prompt fue cancelado o requiere gesto táctil del usuario:
+                // NO forzar salto a PIN; mantener el botón táctil visible en primer plano
+                mostrarFeedback(feedback, 'Toca el botón para escanear tu huella o usa tu PIN.', 'info');
+                return false;
+            }
             mostrarFeedback(feedback, 'Biometría no completada o cancelada. Ingresa tu PIN numérico.', 'alerta');
             mostrarFormularioPinYEnfocar();
             return false;
@@ -446,7 +477,9 @@ export async function desbloquearConBiometria() {
     }
 }
 
-export const desbloquearConBiometriaUI = desbloquearConBiometria;
+export function desbloquearConBiometriaUI() {
+    return desbloquearConBiometria(true);
+}
 
 /**
  * Maneja la acción de cancelar en el modal de desbloqueo.
