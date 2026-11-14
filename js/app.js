@@ -29,7 +29,7 @@ import { delegar } from './dom/delegacion.js';
 import { construirComprobante } from './comprobante.js';
 import { planificarReplicacion, aplicarPlan } from './negocio/replicacion.js';
 import { cuotasEnAlcance, planificarEdicionPlan } from './negocio/cuotas-plan.js';
-import { replicarOrdenGastosHaciaAdelante } from './negocio/orden-gastos.js';
+import { replicarOrdenGastosHaciaAdelante, ordenarYReplicarHaciaAdelante } from './negocio/orden-gastos.js';
 import { crearControlInactividad, MS_INACTIVIDAD } from './core/inactividad.js';
 import { pasarGastoAlSiguiente, deshacerRollover, tieneRollover } from './app.rollover.js';
 import {
@@ -2806,6 +2806,41 @@ export function bajarGastoAlFinal(id) {
     if (moverGastoEnOrdenVisible(id, 'final')) guardarYRenderizar();
 }
 
+/**
+ * Ordena los gastos del mes actual según el criterio elegido y replica
+ * ese mismo orden relativo hacia todos los meses futuros (mes > mesActual).
+ *
+ * @param {'monto-desc'|'monto-asc'|'az'} [criterio='monto-desc']
+ */
+export function ordenarGastosMasivo(criterio = 'monto-desc') {
+    const mes = obtenerMesActual();
+    const lista = db.gastos && db.gastos[mes];
+    if (!Array.isArray(lista) || lista.length === 0) {
+        mostrarNotificacion('No hay gastos en este mes para ordenar.', 'info');
+        return;
+    }
+
+    const { cambioMesActual, mesesReordenados } = ordenarYReplicarHaciaAdelante(db.gastos, mes, criterio);
+
+    const etiquetas = {
+        'monto-desc': 'mayor a menor monto',
+        'monto-asc': 'menor a mayor monto',
+        'az': 'orden alfabético (A–Z)'
+    };
+    const etiqueta = etiquetas[criterio] || etiquetas['monto-desc'];
+
+    if (!cambioMesActual && mesesReordenados === 0) {
+        notificarInfo(`Los gastos ya estaban ordenados por ${etiqueta}.`);
+        return;
+    }
+
+    guardarYRenderizar();
+    const sufijoFuturos = mesesReordenados > 0
+        ? ` y replicado en ${mesesReordenados} mes(es) siguiente(s)`
+        : '';
+    notificarExito(`Gastos ordenados por ${etiqueta}${sufijoFuturos}.`);
+}
+
 /* =========================================================
    5.B.7.B. DESESTIMAR GASTOS
    =========================================================
@@ -3188,6 +3223,7 @@ window.subirGastoUnLugar = subirGastoUnLugar;
 window.bajarGastoUnLugar = bajarGastoUnLugar;
 window.subirGastoAlPrincipio = subirGastoAlPrincipio;
 window.bajarGastoAlFinal = bajarGastoAlFinal;
+window.ordenarGastosMasivo = ordenarGastosMasivo;
 window.desestimarGasto = desestimarGasto;
 window.mostrarMenuContextualGasto = function(id) { toggleMenuGasto(id); };
 window.toggleMenuGasto = toggleMenuGasto;

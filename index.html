@@ -492,6 +492,20 @@
                         <i class="fa-brands fa-whatsapp mr-1"></i> Enviar Comprobante
                     </button>
                 </div>
+                <div class="flex items-center justify-between gap-1.5 pt-2 border-t border-gray-100 flex-wrap">
+                    <span class="text-[10px] font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap"><i class="fa-solid fa-arrow-down-short-wide mr-1 text-indigo-500"></i>Ordenar (+ futuros):</span>
+                    <div class="flex items-center gap-1 flex-wrap">
+                        <button type="button" onclick="window.ordenarGastosMasivo('monto-desc')" class="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-[10px] font-bold transition" title="Ordenar de mayor a menor monto desde este mes en adelante">
+                            $ Mayor ↓
+                        </button>
+                        <button type="button" onclick="window.ordenarGastosMasivo('monto-asc')" class="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-[10px] font-bold transition" title="Ordenar de menor a mayor monto desde este mes en adelante">
+                            $ Menor ↑
+                        </button>
+                        <button type="button" onclick="window.ordenarGastosMasivo('az')" class="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-[10px] font-bold transition" title="Ordenar alfabéticamente A-Z desde este mes en adelante">
+                            A–Z
+                        </button>
+                    </div>
+                </div>
             </div>
 
             <div class="bg-white rounded-2xl p-4 shadow-sm border border-gray-200">

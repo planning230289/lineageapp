@@ -1,20 +1,20 @@
 /* =========================================================
-   REPLICACIÓN DEL ORDEN DE GASTOS (js/negocio/orden-gastos.js)
+   REPLICACIÓN Y ORDENAMIENTO DE GASTOS (js/negocio/orden-gastos.js)
    =========================================================
    Capa de negocio pura: no importa db.js, no toca el DOM ni
    interactúa con Firebase.
 
    Propósito:
-   Cuando la persona reordena los gastos del mes activo (subir,
-   bajar, mover al principio/final o arrastrar y soltar), ese
-   mismo orden relativo se replica automáticamente hacia los
-   meses posteriores (mes > mesActual), sin tocar jamás el
-   historial de meses pasados (mes < mesActual) ni alterar los
-   atributos propios de cada mes futuro (id, monto, pagado,
-   desestimado, número de cuota, etc.).
+   1. Cuando la persona reordena los gastos del mes activo (subir,
+      bajar, mover al principio/final, arrastrar y soltar, u orden
+      rápido por criterio), ese mismo orden relativo se replica
+      automáticamente hacia los meses posteriores (mes > mesActual).
+   2. Jamás toca el historial de meses pasados (mes < mesActual) ni
+      altera los atributos propios de cada mes futuro (id, monto,
+      pagado, desestimado, número de cuota, etc.).
    ========================================================= */
 
-import { normalizarCategoria, normalizarTexto } from '../calculos/nucleo.js';
+import { aNumero, normalizarCategoria, normalizarTexto } from '../calculos/nucleo.js';
 import { parsearCuota } from '../version.js';
 
 /** ¿Es un objeto plano (no null, no array)? */
@@ -141,4 +141,93 @@ export function replicarOrdenGastosHaciaAdelante(gastosPorMes, mesActual) {
     }
 
     return { mesesReordenados };
+}
+
+/**
+ * Ordena in-place una lista de gastos dentro de cada categoría según
+ * el criterio indicado ('monto-desc' | 'monto-asc' | 'az').
+ *
+ * @param {Array<Object>} lista Lista de gastos de un mes
+ * @param {'monto-desc'|'monto-asc'|'az'} [criterio='monto-desc'] Criterio de ordenamiento
+ * @returns {boolean} true si el orden de la lista cambió efectivamente
+ */
+export function ordenarGastosPorCriterio(lista, criterio = 'monto-desc') {
+    if (!Array.isArray(lista) || lista.length < 2) return false;
+
+    const modo = (criterio === 'monto-asc' || criterio === 'az') ? criterio : 'monto-desc';
+    const nuevaLista = lista.slice();
+    const ranurasPorCategoria = new Map();
+
+    for (let i = 0; i < lista.length; i++) {
+        const item = lista[i];
+        if (!esObjetoPlano(item)) continue;
+
+        const cat = normalizarCategoria(item.categoria);
+        if (!cat) continue;
+
+        if (!ranurasPorCategoria.has(cat)) {
+            ranurasPorCategoria.set(cat, []);
+        }
+        ranurasPorCategoria.get(cat).push({
+            indiceOriginal: i,
+            monto: aNumero(item.monto),
+            concepto: normalizarTexto(item.concepto),
+            item
+        });
+    }
+
+    for (const entradas of ranurasPorCategoria.values()) {
+        if (entradas.length < 2) continue;
+
+        const indicesDestino = entradas.map(e => e.indiceOriginal);
+        const ordenadas = entradas.slice().sort((a, b) => {
+            if (modo === 'monto-desc') {
+                if (b.monto !== a.monto) return b.monto - a.monto;
+                if (a.concepto !== b.concepto) return a.concepto.localeCompare(b.concepto);
+            } else if (modo === 'monto-asc') {
+                if (a.monto !== b.monto) return a.monto - b.monto;
+                if (a.concepto !== b.concepto) return a.concepto.localeCompare(b.concepto);
+            } else if (modo === 'az') {
+                if (a.concepto !== b.concepto) return a.concepto.localeCompare(b.concepto);
+                if (b.monto !== a.monto) return b.monto - a.monto;
+            }
+            return a.indiceOriginal - b.indiceOriginal;
+        });
+
+        for (let j = 0; j < indicesDestino.length; j++) {
+            nuevaLista[indicesDestino[j]] = ordenadas[j].item;
+        }
+    }
+
+    const cambioEfectivo = nuevaLista.some((item, idx) => item !== lista[idx]);
+    if (cambioEfectivo) {
+        lista.splice(0, lista.length, ...nuevaLista);
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Ordena los gastos del `mesActual` según `criterio` y replica ese
+ * orden hacia todos los meses futuros (`mes > mesActual`), dejando
+ * intactos los meses anteriores (`mes < mesActual`).
+ *
+ * @param {Object<string, Array<Object>>} gastosPorMes Mapa de listas de gastos por clave "YYYY-MM"
+ * @param {string} mesActual Clave "YYYY-MM" del mes activo
+ * @param {'monto-desc'|'monto-asc'|'az'} [criterio='monto-desc'] Criterio de ordenamiento
+ * @returns {{ cambioMesActual: boolean, mesesReordenados: number }}
+ */
+export function ordenarYReplicarHaciaAdelante(gastosPorMes, mesActual, criterio = 'monto-desc') {
+    if (!esObjetoPlano(gastosPorMes)) return { cambioMesActual: false, mesesReordenados: 0 };
+    if (typeof mesActual !== 'string' || mesActual.trim() === '') {
+        return { cambioMesActual: false, mesesReordenados: 0 };
+    }
+
+    const listaActual = gastosPorMes[mesActual];
+    if (!Array.isArray(listaActual)) return { cambioMesActual: false, mesesReordenados: 0 };
+
+    const cambioMesActual = ordenarGastosPorCriterio(listaActual, criterio);
+    const { mesesReordenados } = replicarOrdenGastosHaciaAdelante(gastosPorMes, mesActual);
+
+    return { cambioMesActual, mesesReordenados };
 }

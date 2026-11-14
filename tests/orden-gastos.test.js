@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { claveOrdenGasto, replicarOrdenGastosHaciaAdelante } from '../js/negocio/orden-gastos.js';
+import {
+    claveOrdenGasto,
+    replicarOrdenGastosHaciaAdelante,
+    ordenarGastosPorCriterio,
+    ordenarYReplicarHaciaAdelante
+} from '../js/negocio/orden-gastos.js';
 
 describe('claveOrdenGasto', () => {
     it('genera clave normalizada por categoría y concepto para gastos fijos y únicos', () => {
@@ -231,3 +236,94 @@ describe('replicarOrdenGastosHaciaAdelante', () => {
         expect(gastosConBasura['2026-06'].map(g => g && g.id)).toEqual(['jun-agua', null, 'jun-luz']);
     });
 });
+
+describe('ordenarGastosPorCriterio y ordenarYReplicarHaciaAdelante', () => {
+    it('ordena por monto-desc, monto-asc y az dentro de cada categoría in-place', () => {
+        const lista = [
+            { id: 'f-gas', concepto: 'Gas', categoria: 'Fijos', monto: 10000 },
+            { id: 'f-luz', concepto: 'Luz', categoria: 'Fijos', monto: 30000 },
+            { id: 'f-agua', concepto: 'Agua', categoria: 'Fijos', monto: 20000 }
+        ];
+
+        expect(ordenarGastosPorCriterio(lista, 'monto-desc')).toBe(true);
+        expect(lista.map(g => g.id)).toEqual(['f-luz', 'f-agua', 'f-gas']);
+        expect(ordenarGastosPorCriterio(lista, 'monto-desc')).toBe(false); // ya ordenado
+
+        expect(ordenarGastosPorCriterio(lista, 'monto-asc')).toBe(true);
+        expect(lista.map(g => g.id)).toEqual(['f-gas', 'f-agua', 'f-luz']);
+
+        expect(ordenarGastosPorCriterio(lista, 'az')).toBe(true);
+        expect(lista.map(g => g.id)).toEqual(['f-agua', 'f-gas', 'f-luz']);
+    });
+
+    it('ordena el mes actual y replica el nuevo orden hacia meses futuros sin tocar meses anteriores', () => {
+        const gastosPorMes = {
+            '2026-03': [
+                { id: 'mar-agua', concepto: 'Agua', categoria: 'Fijos', monto: 9000 },
+                { id: 'mar-luz', concepto: 'Luz', categoria: 'Fijos', monto: 28000 }
+            ],
+            '2026-04': [
+                { id: 'abr-agua', concepto: 'Agua', categoria: 'Fijos', monto: 10000 },
+                { id: 'abr-luz', concepto: 'Luz', categoria: 'Fijos', monto: 30000 },
+                { id: 'abr-gas', concepto: 'Gas', categoria: 'Fijos', monto: 15000 }
+            ],
+            '2026-05': [
+                { id: 'may-gas', concepto: 'Gas', categoria: 'Fijos', monto: 16000 },
+                { id: 'may-agua', concepto: 'Agua', categoria: 'Fijos', monto: 11000 },
+                { id: 'may-luz', concepto: 'Luz', categoria: 'Fijos', monto: 31000 }
+            ]
+        };
+
+        const res = ordenarYReplicarHaciaAdelante(gastosPorMes, '2026-04', 'monto-desc');
+
+        expect(res).toEqual({ cambioMesActual: true, mesesReordenados: 1 });
+        expect(gastosPorMes['2026-03'].map(g => g.id)).toEqual(['mar-agua', 'mar-luz']);
+        expect(gastosPorMes['2026-04'].map(g => g.id)).toEqual(['abr-luz', 'abr-gas', 'abr-agua']);
+        expect(gastosPorMes['2026-05'].map(g => g.id)).toEqual(['may-luz', 'may-gas', 'may-agua']);
+    });
+
+    it('soporta montos en string con formato argentino, desempates determinísticos y elementos nulos intercalados', () => {
+        const lista = [
+            { id: 'f-z', concepto: 'Zeta', categoria: 'Fijos', monto: '15.000,50' },
+            null,
+            { id: 'u-1', concepto: 'Médico', categoria: 'Únicos', monto: 5000 },
+            { id: 'f-a-menor', concepto: 'Alfa', categoria: 'Fijos', monto: '15.000,50' },
+            { id: 'f-a-mayor', concepto: 'Alfa', categoria: 'Fijos', monto: 40000 }
+        ];
+
+        // En monto-desc: primero 40000 ('f-a-mayor'), luego empate en 15000.50 desempatado A-Z ('f-a-menor' antes que 'f-z')
+        expect(ordenarGastosPorCriterio(lista, 'monto-desc')).toBe(true);
+        expect(lista.map(g => g && g.id)).toEqual(['f-a-mayor', null, 'u-1', 'f-a-menor', 'f-z']);
+
+        // En az: empate en concepto 'Alfa' desempata por mayor monto primero ('f-a-mayor' antes que 'f-a-menor'), y luego 'Zeta'
+        expect(ordenarGastosPorCriterio(lista, 'az')).toBe(false); // ya quedó en orden ['f-a-mayor', 'f-a-menor', 'f-z']
+    });
+
+    it('replica hacia meses futuros incluso cuando el mes actual ya estaba ordenado según el criterio', () => {
+        const gastosPorMes = {
+            '2026-04': [
+                { id: 'abr-luz', concepto: 'Luz', categoria: 'Fijos', monto: 30000 },
+                { id: 'abr-agua', concepto: 'Agua', categoria: 'Fijos', monto: 10000 }
+            ],
+            '2026-05': [
+                { id: 'may-agua', concepto: 'Agua', categoria: 'Fijos', monto: 11000 },
+                { id: 'may-luz', concepto: 'Luz', categoria: 'Fijos', monto: 31000 }
+            ]
+        };
+
+        const res = ordenarYReplicarHaciaAdelante(gastosPorMes, '2026-04', 'monto-desc');
+        expect(res).toEqual({ cambioMesActual: false, mesesReordenados: 1 });
+        expect(gastosPorMes['2026-05'].map(g => g.id)).toEqual(['may-luz', 'may-agua']);
+    });
+
+    it('maneja de forma segura listas vacías, de 1 elemento o argumentos inválidos', () => {
+        expect(ordenarGastosPorCriterio(null)).toBe(false);
+        expect(ordenarGastosPorCriterio([])).toBe(false);
+        expect(ordenarGastosPorCriterio([{ id: '1', concepto: 'Agua', categoria: 'Fijos', monto: 100 }])).toBe(false);
+
+        expect(ordenarYReplicarHaciaAdelante(null, '2026-04')).toEqual({ cambioMesActual: false, mesesReordenados: 0 });
+        expect(ordenarYReplicarHaciaAdelante({}, '')).toEqual({ cambioMesActual: false, mesesReordenados: 0 });
+        expect(ordenarYReplicarHaciaAdelante({ '2026-04': null }, '2026-04')).toEqual({ cambioMesActual: false, mesesReordenados: 0 });
+    });
+});
+
