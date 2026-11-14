@@ -29,6 +29,7 @@ import { delegar } from './dom/delegacion.js';
 import { construirComprobante } from './comprobante.js';
 import { planificarReplicacion, aplicarPlan } from './negocio/replicacion.js';
 import { cuotasEnAlcance, planificarEdicionPlan } from './negocio/cuotas-plan.js';
+import { replicarOrdenGastosHaciaAdelante } from './negocio/orden-gastos.js';
 import { crearControlInactividad, MS_INACTIVIDAD } from './core/inactividad.js';
 import { pasarGastoAlSiguiente, deshacerRollover, tieneRollover } from './app.rollover.js';
 import {
@@ -2542,6 +2543,7 @@ async function moverGastoArrastrado(idOrigen, idDestino, e) {
 
     if (!aplicarReordenVisible(lista, propuesta, visibles, filtro)) return;
 
+    replicarOrdenGastosHaciaAdelante(db.gastos, mes);
     guardarYRenderizar();
 }
 
@@ -2766,7 +2768,10 @@ function moverGastoEnOrdenVisible(id, modo) {
     const referencia = visibles[destino];
     const propuesta = armarMovimientoSimple(lista, movido, referencia, modo === 'bajar' || modo === 'final');
 
-    return aplicarReordenVisible(lista, propuesta, visibles, filtro);
+    if (!aplicarReordenVisible(lista, propuesta, visibles, filtro)) return false;
+
+    replicarOrdenGastosHaciaAdelante(db.gastos, mes);
+    return true;
 }
 
 /**

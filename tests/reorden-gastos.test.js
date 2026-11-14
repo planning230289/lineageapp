@@ -8,6 +8,7 @@ import { esPagado, normalizarCategoria } from '../js/calculos/nucleo.js';
 import { coincideId } from '../js/utils/id.js';
 import { formatARS } from '../js/utils/formato.js';
 import { delegar } from '../js/dom/delegacion.js';
+import { replicarOrdenGastosHaciaAdelante } from '../js/negocio/orden-gastos.js';
 
 /* =========================================================
    TEST DEL REORDENAMIENTO DE GASTOS Y DEL RENDER INMEDIATO
@@ -181,6 +182,7 @@ describe('reordenar gastos: subir / bajar / al principio / al final', () => {
         const fabrica = new Function(
             'document', 'db', 'obtenerMesActual', 'coincideId',
             'normalizarCategoria', 'esPagado', 'guardarYRenderizar',
+            'replicarOrdenGastosHaciaAdelante',
             `'use strict';
              ${piezas.join('\n')}
              return {
@@ -201,7 +203,8 @@ describe('reordenar gastos: subir / bajar / al principio / al final', () => {
             coincideId,
             normalizarCategoria,
             esPagado,
-            guardarYRenderizar
+            guardarYRenderizar,
+            replicarOrdenGastosHaciaAdelante
         );
     });
 
@@ -449,6 +452,34 @@ describe('reordenar gastos: subir / bajar / al principio / al final', () => {
             expect(cuerpo, nombre).not.toMatch(/coincides/);
         }
         expect(extraerFuncion('moverGastoEnOrdenVisible')).toContain('coincideId(');
+    });
+
+    it('al reordenar en el mes activo replica el orden a los meses futuros sin tocar meses pasados', () => {
+        db.gastos = {
+            '2026-09': [
+                gasto('sep-luz', { concepto: 'Luz' }),
+                gasto('sep-agua', { concepto: 'Agua' })
+            ],
+            [MES_PRUEBA]: [
+                gasto('oct-luz', { concepto: 'Luz' }),
+                gasto('oct-agua', { concepto: 'Agua' }),
+                gasto('oct-gas', { concepto: 'Gas' })
+            ],
+            '2026-11': [
+                gasto('nov-luz', { concepto: 'Luz' }),
+                gasto('nov-agua', { concepto: 'Agua' }),
+                gasto('nov-gas', { concepto: 'Gas' })
+            ]
+        };
+        filtroEl.value = '';
+        guardarYRenderizar.mockClear();
+
+        api.subirGastoAlPrincipio('oct-gas');
+
+        expect(ids(db.gastos['2026-09'])).toEqual(['sep-luz', 'sep-agua']);
+        expect(ids(db.gastos[MES_PRUEBA])).toEqual(['oct-gas', 'oct-luz', 'oct-agua']);
+        expect(ids(db.gastos['2026-11'])).toEqual(['nov-gas', 'nov-luz', 'nov-agua']);
+        expect(guardarYRenderizar).toHaveBeenCalledTimes(1);
     });
 });
 
@@ -875,6 +906,7 @@ describe('moverGastoArrastrado: coloca en el orden visible', () => {
         const fabrica = new Function(
             'document', 'db', 'obtenerMesActual', 'guardarYRenderizar',
             'coincideId', 'normalizarCategoria', 'esPagado',
+            'replicarOrdenGastosHaciaAdelante',
             `'use strict';
              ${piezas.join('\n')}
              return { moverGastoArrastrado, ordenarGastosParaVista };`
@@ -884,7 +916,8 @@ describe('moverGastoArrastrado: coloca en el orden visible', () => {
         guardarYRenderizar = vi.fn();
         apiOrden = fabrica(
             dom.window.document, db, () => MES, guardarYRenderizar,
-            coincideId, normalizarCategoria, esPagado
+            coincideId, normalizarCategoria, esPagado,
+            replicarOrdenGastosHaciaAdelante
         );
         moverGastoArrastrado = apiOrden.moverGastoArrastrado;
     });
@@ -1097,6 +1130,27 @@ describe('moverGastoArrastrado: coloca en el orden visible', () => {
 
         expect(ids(db.gastos[MES])).toEqual(['luz', 'gas']);
         expect(guardarYRenderizar).not.toHaveBeenCalled();
+    });
+
+    it('al arrastrar y soltar en el mes activo replica el orden a los meses futuros', async () => {
+        db.gastos = {
+            [MES]: [
+                gasto('oct-luz', { concepto: 'Luz' }),
+                gasto('oct-agua', { concepto: 'Agua' })
+            ],
+            '2026-11': [
+                gasto('nov-luz', { concepto: 'Luz' }),
+                gasto('nov-agua', { concepto: 'Agua' })
+            ]
+        };
+        filtroEl.value = '';
+        guardarYRenderizar.mockClear();
+
+        await moverGastoArrastrado('oct-agua', 'oct-luz', drop(0, 'oct-luz'));
+
+        expect(ids(db.gastos[MES])).toEqual(['oct-agua', 'oct-luz']);
+        expect(ids(db.gastos['2026-11'])).toEqual(['nov-agua', 'nov-luz']);
+        expect(guardarYRenderizar).toHaveBeenCalledTimes(1);
     });
 });
 
