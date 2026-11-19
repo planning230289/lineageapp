@@ -79,7 +79,7 @@ export function pasarGastoAlSiguiente(id) {
     db.gastos[mesActual] = listaActual.filter(g => !coincideId(g.id, id));
 
     // Poner en el mes siguiente con trazabilidad
-    db.gastos[mesSiguiente].push({
+    const gastoMovido = {
         id: gasto.id, // Conserva el mismo ID para trazabilidad
         concepto: gasto.concepto,
         categoria: gasto.categoria,
@@ -88,7 +88,11 @@ export function pasarGastoAlSiguiente(id) {
         origenMes: mesActual,
         cadenaOrigen: cadena,
         desestimado: gasto.desestimado || false
-    });
+    };
+    if (gasto.grupoId !== undefined) {
+        gastoMovido.grupoId = gasto.grupoId;
+    }
+    db.gastos[mesSiguiente].push(gastoMovido);
 
     if (typeof window !== 'undefined' && window.guardarYRenderizar) {
         window.guardarYRenderizar();
@@ -96,6 +100,66 @@ export function pasarGastoAlSiguiente(id) {
         guardarTodo && guardarTodo();
     }
     notificarExito('Gasto pasado a ' + mesSiguiente + ' con trazabilidad (origen: ' + cadena + ').');
+}
+
+/**
+ * Mueve un gasto pendiente al mes anterior (rollover inverso).
+ *
+ * Quita el gasto del mes actual y lo mueve al mes anterior conservando
+ * su ID, grupoId (si tiene), desestimado y registrando origenMes y cadenaOrigen.
+ *
+ * @param {string} id ID del gasto a mover
+ */
+export function pasarGastoAlAnterior(id) {
+    const mesActual = obtenerMesActual();
+    const mesAnterior = obtenerMesAnterior(mesActual);
+    const listaActual = (db.gastos && db.gastos[mesActual]) || [];
+    const gasto = listaActual.find(g => coincideId(g.id, id));
+
+    if (!gasto) {
+        return mostrarNotificacion('No se encontró el gasto a pasar.', 'warning');
+    }
+    if (esPagado(gasto)) {
+        return mostrarNotificacion('Solo se pueden pasar gastos pendientes.', 'info');
+    }
+
+    if (!db.gastos) db.gastos = {};
+    if (!db.gastos[mesAnterior]) db.gastos[mesAnterior] = [];
+
+    // Verificar que no exista ya en el mes anterior (evitar duplicados)
+    const yaExiste = db.gastos[mesAnterior].some(g => coincideId(g.id, gasto.id));
+    if (yaExiste) {
+        return mostrarNotificacion('Este gasto ya existe en ' + mesAnterior + '.', 'info');
+    }
+
+    // Construir la cadena de origen ANTES de mover
+    const cadena = construirCadenaOrigen(gasto, mesActual);
+
+    // MUEVE: quitar del mes actual
+    db.gastos[mesActual] = listaActual.filter(g => !coincideId(g.id, id));
+
+    // Poner en el mes anterior con trazabilidad
+    const gastoMovido = {
+        id: gasto.id,
+        concepto: gasto.concepto,
+        categoria: gasto.categoria,
+        monto: gasto.monto,
+        pagado: false,
+        origenMes: mesActual,
+        cadenaOrigen: cadena,
+        desestimado: gasto.desestimado || false
+    };
+    if (gasto.grupoId !== undefined) {
+        gastoMovido.grupoId = gasto.grupoId;
+    }
+    db.gastos[mesAnterior].push(gastoMovido);
+
+    if (typeof window !== 'undefined' && window.guardarYRenderizar) {
+        window.guardarYRenderizar();
+    } else {
+        guardarTodo && guardarTodo();
+    }
+    notificarExito('Gasto pasado a ' + mesAnterior + ' con trazabilidad (origen: ' + cadena + ').');
 }
 
 /**
@@ -135,7 +199,7 @@ export function deshacerRollover(id) {
     db.gastos[mesActual] = listaActual.filter(g => !coincideId(g.id, id));
 
     // Devolver al mes original, limpiando campos de rollover
-    db.gastos[mesOrigen].push({
+    const gastoRestaurado = {
         id: gasto.id,
         concepto: gasto.concepto,
         categoria: gasto.categoria,
@@ -143,7 +207,11 @@ export function deshacerRollover(id) {
         pagado: false,
         desestimado: gasto.desestimado || false
         // No se copian origenMes, cadenaOrigen, pasado, pasadoAMes, pasadoEn
-    });
+    };
+    if (gasto.grupoId !== undefined) {
+        gastoRestaurado.grupoId = gasto.grupoId;
+    }
+    db.gastos[mesOrigen].push(gastoRestaurado);
 
     if (typeof window !== 'undefined' && window.guardarYRenderizar) {
         window.guardarYRenderizar();

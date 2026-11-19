@@ -294,11 +294,21 @@ export function calcularGastosDesde(gastos) {
 
 /**
  * Suma la deuda de cuotas impagas que coincidan con una palabra
- * clave, sobre todos los meses cargados.
+ * clave, sobre todos los meses cargados, incluyendo el desglose
+ * ordenado cronológicamente por mes.
  *
  * @param {Object} gastosPorMes Mapa { 'YYYY-MM': Array<Gasto> }
  * @param {string} keyword Palabra clave de la regla de pasivo
- * @returns {{totalDeuda:number, cuotasRestantes:number}}
+ * @returns {{
+ *   totalDeuda: number,
+ *   cuotasRestantes: number,
+ *   detallePorMes: Array<{
+ *     mes: string,
+ *     subtotal: number,
+ *     cantidad: number,
+ *     items: Array<{ id: *, concepto: string, monto: number }>
+ *   }>
+ * }}
  */
 export function calcularPasivoDesde(gastosPorMes, keyword) {
     const clave = normalizarTexto(keyword);
@@ -306,9 +316,15 @@ export function calcularPasivoDesde(gastosPorMes, keyword) {
 
     let totalDeuda = 0;
     let cuotasRestantes = 0;
+    const detallePorMes = [];
 
-    for (const mesKey of Object.keys(meses)) {
+    const mesesOrdenados = Object.keys(meses).sort((a, b) => a.localeCompare(b));
+
+    for (const mesKey of mesesOrdenados) {
         const lista = Array.isArray(meses[mesKey]) ? meses[mesKey] : [];
+        const items = [];
+        let subtotal = 0;
+
         for (const gasto of lista) {
             if (!gasto) continue;
             if (normalizarCategoria(gasto.categoria) !== 'cuotas') continue;
@@ -316,10 +332,26 @@ export function calcularPasivoDesde(gastosPorMes, keyword) {
             if (clave && !concepto.includes(clave)) continue;
             if (esPagado(gasto)) continue;
 
-            totalDeuda += aNumero(gasto.monto);
+            const monto = aNumero(gasto.monto);
+            subtotal += monto;
+            totalDeuda += monto;
             cuotasRestantes++;
+            items.push({
+                id: gasto.id,
+                concepto: gasto.concepto || '',
+                monto
+            });
+        }
+
+        if (items.length > 0) {
+            detallePorMes.push({
+                mes: mesKey,
+                subtotal,
+                cantidad: items.length,
+                items
+            });
         }
     }
 
-    return { totalDeuda, cuotasRestantes };
+    return { totalDeuda, cuotasRestantes, detallePorMes };
 }

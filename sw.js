@@ -1,5 +1,5 @@
 /* =========================================================
-   SERVICE WORKER OPTIMIZADO (sw.js - v15.8.0)
+   SERVICE WORKER OPTIMIZADO (sw.js - v15.9.0)
    Estrategias de caché inteligentes y auto-actualización inmediata
 
    Es un service worker de tipo MODULE: por eso puede importar.
@@ -38,6 +38,7 @@ const STATIC_ASSETS = [
   './js/utils/id.js',
   './js/utils/formato.js',
   './js/utils/mascara-moneda.js',
+  './js/utils/pasivos-excel.js',
   './js/dom/delegacion.js',
   './js/dom/version-ui.js',
   './js/compras.js',

@@ -12,6 +12,10 @@ import {
     mapaValoresIngreso
 } from '../js/calculos/nucleo.js';
 import { formatARS } from '../js/utils/formato.js';
+import {
+    sanitizarCeldaExcel,
+    generarHtmlExcelPasivos
+} from '../js/utils/pasivos-excel.js';
 
 /* =========================================================
    Tests del núcleo de cálculos.
@@ -366,10 +370,24 @@ describe('calcularPasivoDesde', () => {
         ]
     };
 
-    it('debe sumar sólo las cuotas impagas que matcheen la clave', () => {
+    it('debe sumar sólo las cuotas impagas que matcheen la clave y devolver detallePorMes ordenado', () => {
         const resultado = calcularPasivoDesde(gastosPorMes, 'notebook');
         expect(resultado.cuotasRestantes).toBe(2);
         expect(resultado.totalDeuda).toBe(100000);
+        expect(resultado.detallePorMes).toEqual([
+            {
+                mes: '2026-01',
+                subtotal: 50000,
+                cantidad: 1,
+                items: [{ id: undefined, concepto: 'Notebook (Cuota 2/6)', monto: 50000 }]
+            },
+            {
+                mes: '2026-02',
+                subtotal: 50000,
+                cantidad: 1,
+                items: [{ id: undefined, concepto: 'Notebook (Cuota 3/6)', monto: 50000 }]
+            }
+        ]);
     });
 
     it('no debe devolver NaN si el monto es texto', () => {
@@ -380,9 +398,41 @@ describe('calcularPasivoDesde', () => {
         expect(resultado.totalDeuda).toBe(1500.5);
     });
 
-    it('debe devolver ceros si no hay coincidencia', () => {
-        expect(calcularPasivoDesde(gastosPorMes, 'moto')).toEqual({ totalDeuda: 0, cuotasRestantes: 0 });
-        expect(calcularPasivoDesde(null, 'x')).toEqual({ totalDeuda: 0, cuotasRestantes: 0 });
+    it('debe devolver ceros y detallePorMes vacío si no hay coincidencia', () => {
+        expect(calcularPasivoDesde(gastosPorMes, 'moto')).toEqual({ totalDeuda: 0, cuotasRestantes: 0, detallePorMes: [] });
+        expect(calcularPasivoDesde(null, 'x')).toEqual({ totalDeuda: 0, cuotasRestantes: 0, detallePorMes: [] });
+    });
+});
+
+describe('Exportación Excel de pasivos', () => {
+    it('debe sanitizar celdas contra formula injection', () => {
+        expect(sanitizarCeldaExcel('=SUM(A1:A2)')).toBe("'=SUM(A1:A2)");
+        expect(sanitizarCeldaExcel('+123')).toBe("'+123");
+        expect(sanitizarCeldaExcel('Cuota normal')).toBe('Cuota normal');
+    });
+
+    it('debe generar tabla HTML UTF-8 con columnas y totales', () => {
+        const html = generarHtmlExcelPasivos([
+            {
+                nombre: 'Notebook',
+                calculo: {
+                    totalDeuda: 50000,
+                    cuotasRestantes: 1,
+                    detallePorMes: [
+                        {
+                            mes: '2026-01',
+                            subtotal: 50000,
+                            cantidad: 1,
+                            items: [{ id: '1', concepto: '=CMD()', monto: 50000 }]
+                        }
+                    ]
+                }
+            }
+        ]);
+        expect(html).toContain('<meta charset="UTF-8">');
+        expect(html).toContain('<th>Pasivo</th><th>Mes</th><th>Concepto</th><th>Monto</th>');
+        expect(html).toContain('&#39;=CMD()');
+        expect(html).toContain('Total Pasivo (1 cuota)');
     });
 });
 

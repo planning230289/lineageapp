@@ -31,7 +31,8 @@ import { planificarReplicacion, aplicarPlan } from './negocio/replicacion.js';
 import { cuotasEnAlcance, planificarEdicionPlan } from './negocio/cuotas-plan.js';
 import { replicarOrdenGastosHaciaAdelante, ordenarYReplicarHaciaAdelante } from './negocio/orden-gastos.js';
 import { crearControlInactividad, MS_INACTIVIDAD } from './core/inactividad.js';
-import { pasarGastoAlSiguiente, deshacerRollover, tieneRollover } from './app.rollover.js';
+import { pasarGastoAlSiguiente, pasarGastoAlAnterior, deshacerRollover, tieneRollover } from './app.rollover.js';
+import { descargarExcelPasivos } from './utils/pasivos-excel.js';
 import {
     renderizarCompras,
     guardarItemCompra,
@@ -2233,6 +2234,9 @@ function renderizarListaGastos(gastosFiltrados, gasCalc) {
                 <button draggable="false" data-accion="pasar-al-siguiente" data-id="${idAttr}" class="w-full py-2 min-h-[44px] mb-1 bg-amber-50 hover:bg-amber-100 rounded-xl text-xs font-bold text-amber-700 transition text-left px-3" aria-label="Pasar al mes siguiente">
                     <i class="fa-solid fa-forward mr-2"></i> Pasar al mes siguiente
                 </button>
+                <button draggable="false" data-accion="pasar-al-anterior" data-id="${idAttr}" class="w-full py-2 min-h-[44px] mb-1 bg-sky-50 hover:bg-sky-100 rounded-xl text-xs font-bold text-sky-700 transition text-left px-3" aria-label="Pasar al mes anterior">
+                    <i class="fa-solid fa-backward mr-2"></i> Pasar al mes anterior
+                </button>
                 ` : ''}
                 ${tieneR ? `
                 <button draggable="false" data-accion="deshacer-rollover" data-id="${idAttr}" class="w-full py-2 min-h-[44px] mb-1 bg-purple-50 hover:bg-purple-100 rounded-xl text-xs font-bold text-purple-700 transition text-left px-3" aria-label="Deshacer rollover">
@@ -2284,6 +2288,7 @@ function renderizarListaGastos(gastosFiltrados, gasCalc) {
         'eliminar-gasto': (_el, id) => { eliminarGasto(id); cerrarMenuGasto(); },
         'desestimar-gasto': (_el, id) => { desestimarGasto(id); cerrarMenuGasto(); },
         'pasar-al-siguiente': (_el, id) => { pasarGastoAlSiguiente(id); cerrarMenuGasto(); },
+        'pasar-al-anterior': (_el, id) => { pasarGastoAlAnterior(id); cerrarMenuGasto(); },
         'deshacer-rollover': (_el, id) => { deshacerRollover(id); cerrarMenuGasto(); }
     };
 
@@ -3000,28 +3005,117 @@ document.addEventListener('click', (e) => {
 });
 
 // 5.B.8. Renderizar lista de pasivos
+const pasivosExpandidos = new Set();
+
+function formatearMesAnioPasivo(mesKey) {
+    const partes = String(mesKey || '').split('-');
+    if (partes.length !== 2) return String(mesKey || '');
+    const [anio, mesNum] = partes;
+    const nombre = obtenerNombreMes(Number(mesNum));
+    return nombre ? `${nombre} ${anio}` : String(mesKey);
+}
+
+function togglePasivoDetalle(el, id) {
+    const key = String(id);
+    const panel = document.querySelector(`[data-pasivo-detalle="${CSS.escape ? CSS.escape(key) : key}"]`);
+    const expandido = !pasivosExpandidos.has(key);
+    if (expandido) {
+        pasivosExpandidos.add(key);
+    } else {
+        pasivosExpandidos.delete(key);
+    }
+    if (panel) {
+        panel.classList.toggle('hidden', !expandido);
+    }
+    if (el) {
+        el.setAttribute('aria-expanded', expandido ? 'true' : 'false');
+        const icono = el.querySelector('[data-pasivo-icono]');
+        if (icono) {
+            icono.textContent = expandido ? '▲' : '▼';
+        }
+    }
+}
+
+function exportarPasivoIndividualExcel(id) {
+    const lista = Array.isArray(db.pasivos) ? db.pasivos : [];
+    const pasivo = lista.find(p => coincideId(p.id, id));
+    if (!pasivo) {
+        return notificarAdvertencia('No se encontró el pasivo a exportar.');
+    }
+    const calculo = calcularPasivoPorKeyword(pasivo.keyword);
+    const nombreSlug = slug(pasivo.nombre || 'pasivo') || 'pasivo';
+    descargarExcelPasivos([{ nombre: pasivo.nombre, keyword: pasivo.keyword, calculo }], `pasivo-${nombreSlug}.xls`);
+    notificarExito('Excel del pasivo descargado.');
+}
+
+function exportarTodosPasivosExcel() {
+    const lista = Array.isArray(db.pasivos) ? db.pasivos : [];
+    if (lista.length === 0) {
+        return notificarInfo('No hay pasivos consolidados para exportar.');
+    }
+    const datos = lista.map(p => ({
+        nombre: p.nombre,
+        keyword: p.keyword,
+        calculo: calcularPasivoPorKeyword(p.keyword)
+    }));
+    descargarExcelPasivos(datos, 'pasivos-consolidados.xls');
+    notificarExito('Excel de pasivos consolidados descargado.');
+}
+
 function renderizarListaPasivos(pasivos, saldoReal) {
     const pasivosList = document.getElementById('lista-pasivos-consolidados');
     if (!pasivosList) return;
     pasivosList.innerHTML = '';
 
     delegar(pasivosList, 'click', {
-        'eliminar-pasivo': (_el, id) => eliminarPasivo(id)
+        'eliminar-pasivo': (_el, id) => eliminarPasivo(id),
+        'toggle-pasivo-detalle': (el, id) => togglePasivoDetalle(el, id),
+        'exportar-pasivo-excel': (_el, id) => exportarPasivoIndividualExcel(id)
     });
     pasivos.forEach(p => {
         const calculo = calcularPasivoPorKeyword(p.keyword);
         const alcanza = saldoReal >= calculo.totalDeuda;
+        const idStr = String(p.id);
+        const idAttr = escapeHTML(idStr);
+        const expandido = pasivosExpandidos.has(idStr);
+        const detalle = Array.isArray(calculo.detallePorMes) ? calculo.detallePorMes : [];
+
+        const detalleHTML = detalle.length > 0
+            ? detalle.map(m => {
+                const itemsHTML = (m.items || []).map(item => `
+                    <div class="flex justify-between items-center gap-2 text-[11px] py-1 border-b border-gray-100 last:border-b-0">
+                        <span class="text-gray-700 truncate">${escapeHTML(item.concepto)}</span>
+                        <span class="font-mono text-gray-900 shrink-0">${formatARS(item.monto)}</span>
+                    </div>
+                `).join('');
+                return `
+                    <div class="bg-white rounded-lg border border-gray-200 p-2 space-y-1">
+                        <div class="flex flex-wrap justify-between items-center gap-1 text-[11px] font-bold text-gray-800 pb-1 border-b border-gray-100">
+                            <span>${escapeHTML(formatearMesAnioPasivo(m.mes))} <span class="font-normal text-gray-500">(${m.cantidad} ${m.cantidad === 1 ? 'cuota' : 'cuotas'})</span></span>
+                            <span class="font-mono text-indigo-700">${formatARS(m.subtotal)}</span>
+                        </div>
+                        <div>${itemsHTML}</div>
+                    </div>
+                `;
+            }).join('')
+            : '<p class="text-[11px] text-gray-500 italic px-1">No hay cuotas pendientes para este pasivo.</p>';
+
         const div = document.createElement('div');
         div.className = 'bg-gray-50 p-3 rounded-xl border border-gray-200 space-y-2';
         div.innerHTML = `
-            <div class="flex justify-between items-center">
-                <div>
-                    <span class="font-bold text-xs text-gray-800 block">${escapeHTML(p.nombre)}</span>
+            <div class="flex justify-between items-center gap-2">
+                <div class="min-w-0">
+                    <span class="font-bold text-xs text-gray-800 block truncate">${escapeHTML(p.nombre)}</span>
                     <span class="text-[10px] text-gray-500">Filtro: "${escapeHTML(p.keyword)}"</span>
                 </div>
-                <button type="button" data-accion="eliminar-pasivo" data-id="${escapeHTML(String(p.id))}" class="text-red-500 hover:text-red-700 hover:bg-red-50 p-1.5 rounded-lg text-xs transition" title="Eliminar pasivo" aria-label="Eliminar pasivo">
-                    <i class="fa-solid fa-trash-can"></i>
-                </button>
+                <div class="flex items-center gap-1 shrink-0">
+                    <button type="button" data-accion="exportar-pasivo-excel" data-id="${idAttr}" class="text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 p-1.5 rounded-lg text-xs transition" title="Exportar pasivo a Excel" aria-label="Exportar pasivo a Excel">
+                        <i class="fa-solid fa-file-excel"></i>
+                    </button>
+                    <button type="button" data-accion="eliminar-pasivo" data-id="${idAttr}" class="text-red-500 hover:text-red-700 hover:bg-red-50 p-1.5 rounded-lg text-xs transition" title="Eliminar pasivo" aria-label="Eliminar pasivo">
+                        <i class="fa-solid fa-trash-can"></i>
+                    </button>
+                </div>
             </div>
             <div class="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-gray-200">
                 <div><span class="text-[10px] text-gray-500 block">Cuotas Pendientes</span><span class="font-mono font-bold">${calculo.cuotasRestantes} cuotas</span></div>
@@ -3029,6 +3123,15 @@ function renderizarListaPasivos(pasivos, saldoReal) {
             </div>
             <div class="text-[10px] p-2 rounded-lg ${alcanza ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}">
                 ${alcanza ? '✔ Saldo suficiente para precancelar.' : '⚠ Tu saldo no cubre la cancelación total.'}
+            </div>
+            <div>
+                <button type="button" data-accion="toggle-pasivo-detalle" data-id="${idAttr}" aria-expanded="${expandido ? 'true' : 'false'}" class="w-full flex items-center justify-between px-2.5 py-2 bg-white hover:bg-gray-100 rounded-lg border border-gray-200 text-[11px] font-semibold text-gray-700 transition">
+                    <span>Desglose por mes (${detalle.length} ${detalle.length === 1 ? 'mes' : 'meses'})</span>
+                    <span data-pasivo-icono class="text-[10px] text-gray-400">${expandido ? '▲' : '▼'}</span>
+                </button>
+                <div data-pasivo-detalle="${idAttr}" class="${expandido ? '' : 'hidden'} mt-2 space-y-2">
+                    ${detalleHTML}
+                </div>
             </div>
         `;
         pasivosList.appendChild(div);
@@ -3218,7 +3321,9 @@ window.eliminarGasto = eliminarGasto;
 window.togglePagoGasto = togglePagoGasto;
 window.toggleGastosCategoria = toggleGastosCategoria;
 window.pasarGastoAlSiguiente = pasarGastoAlSiguiente;
+window.pasarGastoAlAnterior = pasarGastoAlAnterior;
 window.deshacerRollover = deshacerRollover;
+window.exportarTodosPasivosExcel = exportarTodosPasivosExcel;
 window.subirGastoUnLugar = subirGastoUnLugar;
 window.bajarGastoUnLugar = bajarGastoUnLugar;
 window.subirGastoAlPrincipio = subirGastoAlPrincipio;
