@@ -56,10 +56,11 @@ export function calcularGastosMes(mes) {
  * Deuda pendiente de las cuotas que matcheen una palabra clave,
  * considerando todos los meses cargados y su desglose mensual.
  * @param {string} keyword
+ * @param {Array<string|number>} [excluidos=[]]
  * @returns {{totalDeuda:number, cuotasRestantes:number, detallePorMes:Array}}
  */
-export function calcularPasivoPorKeyword(keyword) {
-    return calcularPasivoDesde(db.gastos || {}, keyword);
+export function calcularPasivoPorKeyword(keyword, excluidos = []) {
+    return calcularPasivoDesde(db.gastos || {}, keyword, excluidos);
 }
 
 /**

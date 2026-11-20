@@ -297,8 +297,12 @@ export function calcularGastosDesde(gastos) {
  * clave, sobre todos los meses cargados, incluyendo el desglose
  * ordenado cronológicamente por mes.
  *
+ * Permite excluir puntualmente IDs de gastos sin modificar los
+ * registros originales en `gastosPorMes`.
+ *
  * @param {Object} gastosPorMes Mapa { 'YYYY-MM': Array<Gasto> }
  * @param {string} keyword Palabra clave de la regla de pasivo
+ * @param {Array<string|number>} [excluidos=[]] IDs de gastos a omitir del consolidado
  * @returns {{
  *   totalDeuda: number,
  *   cuotasRestantes: number,
@@ -310,9 +314,16 @@ export function calcularGastosDesde(gastos) {
  *   }>
  * }}
  */
-export function calcularPasivoDesde(gastosPorMes, keyword) {
+export function calcularPasivoDesde(gastosPorMes, keyword, excluidos = []) {
     const clave = normalizarTexto(keyword);
     const meses = gastosPorMes && typeof gastosPorMes === 'object' ? gastosPorMes : {};
+    const excluidosSet = new Set(
+        Array.isArray(excluidos)
+            ? excluidos
+                .filter(id => (typeof id === 'string' || typeof id === 'number') && String(id) !== '')
+                .map(id => String(id))
+            : []
+    );
 
     let totalDeuda = 0;
     let cuotasRestantes = 0;
@@ -331,6 +342,7 @@ export function calcularPasivoDesde(gastosPorMes, keyword) {
             const concepto = normalizarTexto(gasto.concepto);
             if (clave && !concepto.includes(clave)) continue;
             if (esPagado(gasto)) continue;
+            if ((typeof gasto.id === 'string' || typeof gasto.id === 'number') && String(gasto.id) !== '' && excluidosSet.has(String(gasto.id))) continue;
 
             const monto = aNumero(gasto.monto);
             subtotal += monto;

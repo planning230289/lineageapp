@@ -1700,19 +1700,150 @@ export function eliminarGasto(id) {
 }
 
 // 4.C. Pasivos, Deseos y Utilidades (Dólar, WhatsApp)
+let pasivoEditandoId = null;
+
+function actualizarEstadoFormularioPasivo(pasivo = null) {
+    const form = document.getElementById('form-pasivo');
+    const inputNombre = document.getElementById('pas-nombre');
+    const inputKeyword = document.getElementById('pas-keyword');
+    const titulo = document.getElementById('titulo-form-pasivo');
+    const btnSubmit = document.getElementById('btn-submit-pasivo');
+    const btnCancelar = document.getElementById('btn-cancelar-edicion-pasivo');
+
+    if (pasivo) {
+        pasivoEditandoId = pasivo.id;
+        if (inputNombre) inputNombre.value = pasivo.nombre || '';
+        if (inputKeyword) inputKeyword.value = pasivo.keyword || '';
+        if (titulo) titulo.textContent = 'Editar Regla de Pasivo / Deuda';
+        if (btnSubmit) btnSubmit.textContent = 'Guardar Cambios';
+        if (btnCancelar) btnCancelar.classList.remove('hidden');
+    } else {
+        pasivoEditandoId = null;
+        if (form) form.reset();
+        if (titulo) titulo.textContent = 'Registrar Regla de Pasivo / Deuda';
+        if (btnSubmit) btnSubmit.textContent = 'Agregar Regla de Deuda';
+        if (btnCancelar) btnCancelar.classList.add('hidden');
+    }
+}
+
+export function editarPasivo(id) {
+    const lista = Array.isArray(db.pasivos) ? db.pasivos : [];
+    const pasivo = lista.find(p => coincideId(p.id, id));
+    if (!pasivo) {
+        return notificarAdvertencia('No se encontró el pasivo a editar.');
+    }
+    actualizarEstadoFormularioPasivo(pasivo);
+    const form = document.getElementById('form-pasivo');
+    if (form && typeof form.scrollIntoView === 'function') {
+        form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    document.getElementById('pas-nombre')?.focus();
+}
+
+export function cancelarEdicionPasivo() {
+    actualizarEstadoFormularioPasivo(null);
+}
+
 export function guardarReglaPasivo(e) {
     e.preventDefault();
-    const keyword = document.getElementById('pas-keyword').value.trim().toLowerCase();
-    const nombre = document.getElementById('pas-nombre').value.trim();
-    if (!db.pasivos) db.pasivos = [];
-    db.pasivos.push({ id: generarId(), keyword, nombre });
-    document.getElementById('form-pasivo').reset();
+    const keyword = (document.getElementById('pas-keyword')?.value || '').trim().toLowerCase();
+    const nombre = (document.getElementById('pas-nombre')?.value || '').trim();
+    if (!nombre || !keyword) {
+        return notificarAdvertencia('Completá el nombre y la palabra clave del pasivo.');
+    }
+    if (!Array.isArray(db.pasivos)) db.pasivos = [];
+
+    if (pasivoEditandoId !== null) {
+        const idx = db.pasivos.findIndex(p => coincideId(p.id, pasivoEditandoId));
+        if (idx !== -1) {
+            const actual = db.pasivos[idx];
+            db.pasivos[idx] = {
+                ...actual,
+                id: actual.id,
+                nombre,
+                keyword,
+                excluidos: Array.isArray(actual.excluidos) ? actual.excluidos : []
+            };
+            actualizarEstadoFormularioPasivo(null);
+            guardarYRenderizar();
+            notificarExito('Regla de pasivo actualizada.');
+            return;
+        }
+        actualizarEstadoFormularioPasivo(null);
+    }
+
+    db.pasivos.push({ id: generarId(), keyword, nombre, excluidos: [] });
+    actualizarEstadoFormularioPasivo(null);
     guardarYRenderizar();
+    notificarExito('Regla de pasivo agregada.');
 }
 
 export function eliminarPasivo(id) {
+    if (pasivoEditandoId !== null && coincideId(pasivoEditandoId, id)) {
+        actualizarEstadoFormularioPasivo(null);
+    }
+    pasivosExpandidos.delete(String(id));
     db.pasivos = (db.pasivos || []).filter(p => !coincideId(p.id, id));
     guardarYRenderizar();
+}
+
+export function actualizarPasivosConsolidados() {
+    const lista = Array.isArray(db.pasivos) ? db.pasivos : [];
+    renderizarTodo();
+    if (lista.length === 0) {
+        return notificarInfo('No hay pasivos consolidados registrados.');
+    }
+    let totalCuotas = 0;
+    let totalDeuda = 0;
+    lista.forEach(p => {
+        const calc = calcularPasivoPorKeyword(p.keyword, p.excluidos);
+        totalCuotas += calc.cuotasRestantes;
+        totalDeuda += calc.totalDeuda;
+    });
+    notificarExito(`Pasivos actualizados (${lista.length} ${lista.length === 1 ? 'regla' : 'reglas'}, ${totalCuotas} ${totalCuotas === 1 ? 'cuota pendiente' : 'cuotas pendientes'}, ${formatARS(totalDeuda)}).`);
+}
+
+function actualizarPasivoIndividual(id) {
+    const lista = Array.isArray(db.pasivos) ? db.pasivos : [];
+    const pasivo = lista.find(p => coincideId(p.id, id));
+    if (!pasivo) {
+        return notificarAdvertencia('No se encontró el pasivo a actualizar.');
+    }
+    renderizarTodo();
+    const calc = calcularPasivoPorKeyword(pasivo.keyword, pasivo.excluidos);
+    notificarExito(`${pasivo.nombre}: ${calc.cuotasRestantes} ${calc.cuotasRestantes === 1 ? 'cuota pendiente' : 'cuotas pendientes'} (${formatARS(calc.totalDeuda)}).`);
+}
+
+function excluirConceptoPasivo(pasivoId, gastoId) {
+    if (pasivoId === undefined || pasivoId === null || gastoId === undefined || gastoId === null || String(gastoId) === '') {
+        return;
+    }
+    const lista = Array.isArray(db.pasivos) ? db.pasivos : [];
+    const pasivo = lista.find(p => coincideId(p.id, pasivoId));
+    if (!pasivo) {
+        return notificarAdvertencia('No se encontró el pasivo.');
+    }
+    if (!Array.isArray(pasivo.excluidos)) {
+        pasivo.excluidos = [];
+    }
+    const gastoKey = String(gastoId);
+    if (!pasivo.excluidos.some(x => String(x) === gastoKey)) {
+        pasivo.excluidos.push(gastoKey);
+    }
+    guardarYRenderizar();
+    notificarInfo('Concepto excluido del pasivo. Podés restaurarlo cuando quieras.');
+}
+
+function restaurarExcluidosPasivo(id) {
+    const lista = Array.isArray(db.pasivos) ? db.pasivos : [];
+    const pasivo = lista.find(p => coincideId(p.id, id));
+    if (!pasivo) {
+        return notificarAdvertencia('No se encontró el pasivo.');
+    }
+    const cantidad = Array.isArray(pasivo.excluidos) ? pasivo.excluidos.length : 0;
+    pasivo.excluidos = [];
+    guardarYRenderizar();
+    notificarExito(`Se restauraron ${cantidad} ${cantidad === 1 ? 'concepto excluido' : 'conceptos excluidos'} en ${pasivo.nombre}.`);
 }
 
 export function guardarDeseo(e) {
@@ -3042,7 +3173,7 @@ function exportarPasivoIndividualExcel(id) {
     if (!pasivo) {
         return notificarAdvertencia('No se encontró el pasivo a exportar.');
     }
-    const calculo = calcularPasivoPorKeyword(pasivo.keyword);
+    const calculo = calcularPasivoPorKeyword(pasivo.keyword, pasivo.excluidos);
     const nombreSlug = slug(pasivo.nombre || 'pasivo') || 'pasivo';
     descargarExcelPasivos([{ nombre: pasivo.nombre, keyword: pasivo.keyword, calculo }], `pasivo-${nombreSlug}.xls`);
     notificarExito('Excel del pasivo descargado.');
@@ -3056,7 +3187,7 @@ function exportarTodosPasivosExcel() {
     const datos = lista.map(p => ({
         nombre: p.nombre,
         keyword: p.keyword,
-        calculo: calcularPasivoPorKeyword(p.keyword)
+        calculo: calcularPasivoPorKeyword(p.keyword, p.excluidos)
     }));
     descargarExcelPasivos(datos, 'pasivos-consolidados.xls');
     notificarExito('Excel de pasivos consolidados descargado.');
@@ -3068,12 +3199,17 @@ function renderizarListaPasivos(pasivos, saldoReal) {
     pasivosList.innerHTML = '';
 
     delegar(pasivosList, 'click', {
+        'actualizar-pasivo': (_el, id) => actualizarPasivoIndividual(id),
+        'editar-pasivo': (_el, id) => editarPasivo(id),
         'eliminar-pasivo': (_el, id) => eliminarPasivo(id),
         'toggle-pasivo-detalle': (el, id) => togglePasivoDetalle(el, id),
-        'exportar-pasivo-excel': (_el, id) => exportarPasivoIndividualExcel(id)
+        'exportar-pasivo-excel': (_el, id) => exportarPasivoIndividualExcel(id),
+        'excluir-concepto-pasivo': (el) => excluirConceptoPasivo(el.dataset.pasivoId, el.dataset.gastoId),
+        'restaurar-excluidos-pasivo': (_el, id) => restaurarExcluidosPasivo(id)
     });
     pasivos.forEach(p => {
-        const calculo = calcularPasivoPorKeyword(p.keyword);
+        const excluidos = Array.isArray(p.excluidos) ? p.excluidos : [];
+        const calculo = calcularPasivoPorKeyword(p.keyword, excluidos);
         const alcanza = saldoReal >= calculo.totalDeuda;
         const idStr = String(p.id);
         const idAttr = escapeHTML(idStr);
@@ -3082,12 +3218,21 @@ function renderizarListaPasivos(pasivos, saldoReal) {
 
         const detalleHTML = detalle.length > 0
             ? detalle.map(m => {
-                const itemsHTML = (m.items || []).map(item => `
-                    <div class="flex justify-between items-center gap-2 text-[11px] py-1 border-b border-gray-100 last:border-b-0">
-                        <span class="text-gray-700 truncate">${escapeHTML(item.concepto)}</span>
-                        <span class="font-mono text-gray-900 shrink-0">${formatARS(item.monto)}</span>
-                    </div>
-                `).join('');
+                const itemsHTML = (m.items || []).map(item => {
+                    const puedeExcluir = item.id !== null && item.id !== undefined && String(item.id) !== '';
+                    const btnExcluir = puedeExcluir
+                        ? `<button type="button" data-accion="excluir-concepto-pasivo" data-pasivo-id="${idAttr}" data-gasto-id="${escapeHTML(String(item.id))}" class="text-gray-400 hover:text-red-600 hover:bg-red-50 p-1 rounded transition shrink-0" title="Excluir del consolidado" aria-label="Excluir concepto del consolidado"><i class="fa-solid fa-xmark"></i></button>`
+                        : '';
+                    return `
+                        <div class="flex justify-between items-center gap-2 text-[11px] py-1 border-b border-gray-100 last:border-b-0">
+                            <span class="text-gray-700 truncate">${escapeHTML(item.concepto)}</span>
+                            <div class="flex items-center gap-1.5 shrink-0">
+                                <span class="font-mono text-gray-900">${formatARS(item.monto)}</span>
+                                ${btnExcluir}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
                 return `
                     <div class="bg-white rounded-lg border border-gray-200 p-2 space-y-1">
                         <div class="flex flex-wrap justify-between items-center gap-1 text-[11px] font-bold text-gray-800 pb-1 border-b border-gray-100">
@@ -3100,6 +3245,17 @@ function renderizarListaPasivos(pasivos, saldoReal) {
             }).join('')
             : '<p class="text-[11px] text-gray-500 italic px-1">No hay cuotas pendientes para este pasivo.</p>';
 
+        const bloqueExcluidosHTML = excluidos.length > 0
+            ? `
+                <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] bg-indigo-50/70 border border-indigo-100 rounded-lg px-2.5 py-1.5">
+                    <span class="text-indigo-700">${excluidos.length} ${excluidos.length === 1 ? 'concepto excluido' : 'conceptos excluidos'}</span>
+                    <button type="button" data-accion="restaurar-excluidos-pasivo" data-id="${idAttr}" class="inline-flex items-center gap-1 text-indigo-700 hover:text-indigo-900 font-bold underline decoration-indigo-300 transition" title="Restaurar conceptos excluidos" aria-label="Restaurar conceptos excluidos">
+                        <i class="fa-solid fa-rotate-left"></i> Restaurar excluidos (${excluidos.length})
+                    </button>
+                </div>
+            `
+            : '';
+
         const div = document.createElement('div');
         div.className = 'bg-gray-50 p-3 rounded-xl border border-gray-200 space-y-2';
         div.innerHTML = `
@@ -3109,6 +3265,12 @@ function renderizarListaPasivos(pasivos, saldoReal) {
                     <span class="text-[10px] text-gray-500">Filtro: "${escapeHTML(p.keyword)}"</span>
                 </div>
                 <div class="flex items-center gap-1 shrink-0">
+                    <button type="button" data-accion="actualizar-pasivo" data-id="${idAttr}" class="text-sky-600 hover:text-sky-800 hover:bg-sky-50 p-1.5 rounded-lg text-xs transition" title="Actualizar pasivo" aria-label="Actualizar pasivo">
+                        <i class="fa-solid fa-arrows-rotate"></i>
+                    </button>
+                    <button type="button" data-accion="editar-pasivo" data-id="${idAttr}" class="text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 p-1.5 rounded-lg text-xs transition" title="Editar pasivo" aria-label="Editar pasivo">
+                        <i class="fa-solid fa-pen-to-square"></i>
+                    </button>
                     <button type="button" data-accion="exportar-pasivo-excel" data-id="${idAttr}" class="text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 p-1.5 rounded-lg text-xs transition" title="Exportar pasivo a Excel" aria-label="Exportar pasivo a Excel">
                         <i class="fa-solid fa-file-excel"></i>
                     </button>
@@ -3124,6 +3286,7 @@ function renderizarListaPasivos(pasivos, saldoReal) {
             <div class="text-[10px] p-2 rounded-lg ${alcanza ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}">
                 ${alcanza ? '✔ Saldo suficiente para precancelar.' : '⚠ Tu saldo no cubre la cancelación total.'}
             </div>
+            ${bloqueExcluidosHTML}
             <div>
                 <button type="button" data-accion="toggle-pasivo-detalle" data-id="${idAttr}" aria-expanded="${expandido ? 'true' : 'false'}" class="w-full flex items-center justify-between px-2.5 py-2 bg-white hover:bg-gray-100 rounded-lg border border-gray-200 text-[11px] font-semibold text-gray-700 transition">
                     <span>Desglose por mes (${detalle.length} ${detalle.length === 1 ? 'mes' : 'meses'})</span>
@@ -3324,6 +3487,7 @@ window.pasarGastoAlSiguiente = pasarGastoAlSiguiente;
 window.pasarGastoAlAnterior = pasarGastoAlAnterior;
 window.deshacerRollover = deshacerRollover;
 window.exportarTodosPasivosExcel = exportarTodosPasivosExcel;
+window.actualizarPasivosConsolidados = actualizarPasivosConsolidados;
 window.subirGastoUnLugar = subirGastoUnLugar;
 window.bajarGastoUnLugar = bajarGastoUnLugar;
 window.subirGastoAlPrincipio = subirGastoAlPrincipio;
@@ -3352,6 +3516,7 @@ window.ejecutarRollOverDeudas = ejecutarRollOverDeudas;
 window.limpiarFiltroGastos = limpiarFiltroGastos;
 window.accionReporteWpGastos = accionReporteWpGastos;
 window.guardarReglaPasivo = guardarReglaPasivo;
+window.cancelarEdicionPasivo = cancelarEdicionPasivo;
 window.eliminarPasivo = eliminarPasivo;
 window.guardarDeseo = guardarDeseo;
 window.eliminarDeseo = eliminarDeseo;

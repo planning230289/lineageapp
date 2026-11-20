@@ -402,6 +402,95 @@ describe('calcularPasivoDesde', () => {
         expect(calcularPasivoDesde(gastosPorMes, 'moto')).toEqual({ totalDeuda: 0, cuotasRestantes: 0, detallePorMes: [] });
         expect(calcularPasivoDesde(null, 'x')).toEqual({ totalDeuda: 0, cuotasRestantes: 0, detallePorMes: [] });
     });
+
+    it('debe excluir gastos por id sin modificar los datos originales', () => {
+        const gastosConIds = {
+            '2026-01': [
+                { id: 'g-1', categoria: 'Cuotas', concepto: 'Notebook (Cuota 1/3)', monto: 50000, pagado: false },
+                { id: 'g-2', categoria: 'Cuotas', concepto: 'Notebook (Cuota 2/3)', monto: 50000, pagado: false }
+            ],
+            '2026-02': [
+                { id: 'g-3', categoria: 'Cuotas', concepto: 'Notebook (Cuota 3/3)', monto: 50000, pagado: false }
+            ]
+        };
+
+        const resultado = calcularPasivoDesde(gastosConIds, 'notebook', ['g-2', 'g-3']);
+        expect(resultado.cuotasRestantes).toBe(1);
+        expect(resultado.totalDeuda).toBe(50000);
+        expect(resultado.detallePorMes).toEqual([
+            {
+                mes: '2026-01',
+                subtotal: 50000,
+                cantidad: 1,
+                items: [{ id: 'g-1', concepto: 'Notebook (Cuota 1/3)', monto: 50000 }]
+            }
+        ]);
+        expect(gastosConIds['2026-01']).toHaveLength(2);
+        expect(gastosConIds['2026-02']).toHaveLength(1);
+    });
+
+    it('debe normalizar excluidos entre string y number y tolerar valores nulos', () => {
+        const gastosMixtos = {
+            '2026-03': [
+                { id: 101, categoria: 'Cuotas', concepto: 'Zapatillas (Cuota 1/3)', monto: 20000, pagado: false },
+                { id: '202', categoria: 'Cuotas', concepto: 'Zapatillas (Cuota 2/3)', monto: 20000, pagado: false },
+                { id: '303', categoria: 'Cuotas', concepto: 'Zapatillas (Cuota 3/3)', monto: 20000, pagado: false }
+            ]
+        };
+
+        const resultado = calcularPasivoDesde(gastosMixtos, 'zapatillas', ['101', 202, null, undefined]);
+        expect(resultado.cuotasRestantes).toBe(1);
+        expect(resultado.totalDeuda).toBe(20000);
+        expect(resultado.detallePorMes[0].items.map(i => i.id)).toEqual(['303']);
+    });
+
+    it('debe mantener retrocompatibilidad si excluidos no se pasa o no es un array', () => {
+        const gastosConId = {
+            '2026-04': [
+                { id: 'a1', categoria: 'Cuotas', concepto: 'Silla (Cuota 1/2)', monto: 30000, pagado: false }
+            ]
+        };
+
+        expect(calcularPasivoDesde(gastosConId, 'silla').totalDeuda).toBe(30000);
+        expect(calcularPasivoDesde(gastosConId, 'silla', []).totalDeuda).toBe(30000);
+        expect(calcularPasivoDesde(gastosConId, 'silla', null).totalDeuda).toBe(30000);
+    });
+
+    it('debe omitir el mes y devolver deuda 0 cuando se excluyen todas las cuotas de un mes o del pasivo', () => {
+        const gastos = {
+            '2026-05': [
+                { id: 'm1-1', categoria: 'Cuotas', concepto: 'TV (Cuota 1/2)', monto: 40000, pagado: false }
+            ],
+            '2026-06': [
+                { id: 'm2-1', categoria: 'Cuotas', concepto: 'TV (Cuota 2/2)', monto: 40000, pagado: false }
+            ]
+        };
+
+        const sinMesUno = calcularPasivoDesde(gastos, 'tv', ['m1-1']);
+        expect(sinMesUno.cuotasRestantes).toBe(1);
+        expect(sinMesUno.totalDeuda).toBe(40000);
+        expect(sinMesUno.detallePorMes.map(m => m.mes)).toEqual(['2026-06']);
+
+        const todoExcluido = calcularPasivoDesde(gastos, 'tv', ['m1-1', 'm2-1']);
+        expect(todoExcluido).toEqual({ totalDeuda: 0, cuotasRestantes: 0, detallePorMes: [] });
+    });
+
+    it('debe soportar id 0 y tolerar excluidos con duplicados, strings vacíos u objetos sin fallar', () => {
+        const gastos = {
+            '2026-07': [
+                { id: 0, categoria: 'Cuotas', concepto: 'Bici (Cuota 1/3)', monto: 10000, pagado: false },
+                { id: '', categoria: 'Cuotas', concepto: 'Bici (Cuota 2/3)', monto: 15000, pagado: false },
+                { id: 'b-3', categoria: 'Cuotas', concepto: 'Bici (Cuota 3/3)', monto: 25000, pagado: false }
+            ]
+        };
+
+        const sinProto = Object.create(null);
+        const resultado = calcularPasivoDesde(gastos, 'bici', [0, '0', '', {}, sinProto, 'b-3', 'b-3']);
+        expect(resultado.cuotasRestantes).toBe(1);
+        expect(resultado.totalDeuda).toBe(15000);
+        expect(resultado.detallePorMes[0].items.map(i => i.concepto)).toEqual(['Bici (Cuota 2/3)']);
+        expect(calcularPasivoDesde(gastos, 'bici', { id: 'b-3' }).cuotasRestantes).toBe(3);
+    });
 });
 
 describe('Exportación Excel de pasivos', () => {
