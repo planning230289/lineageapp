@@ -412,6 +412,8 @@ describe('descarga de respaldo y cierre en app.js', () => {
         const fabrica = new Function(
             'document', 'db', 'auth', 'localStorage', 'guardarYRenderizar',
             'descargarJson', 'bloquearSesionCripto', 'authCerrarSesion', 'mostrarPantallaLogin',
+            'estaNubeListaPara', 'puedeGuardarLocalPara', 'tieneCifradoActivoLocal',
+            'limpiarStorageCompras', 'limpiarHistorialCopias',
             `'use strict'; ${src}; return cerrarPorInactividad;`
         );
         return fabrica(
@@ -423,7 +425,12 @@ describe('descarga de respaldo y cierre en app.js', () => {
             mocks.descargarJson,
             mocks.bloquearSesionCripto,
             mocks.authCerrarSesion,
-            mocks.mostrarPantallaLogin
+            mocks.mostrarPantallaLogin,
+            mocks.estaNubeListaPara ?? (() => true),
+            mocks.puedeGuardarLocalPara ?? ((uid) => (mocks.estaNubeListaPara ? mocks.estaNubeListaPara(uid) : true)),
+            mocks.tieneCifradoActivoLocal ?? (() => false),
+            mocks.limpiarStorageCompras ?? vi.fn(),
+            mocks.limpiarHistorialCopias ?? vi.fn()
         );
     }
 
@@ -436,6 +443,8 @@ describe('descarga de respaldo y cierre en app.js', () => {
             db: { timestamp: 0 },
             auth: { currentUser: { uid: 'usr_test_123' } },
             localStorage: { setItem: vi.fn(), removeItem: vi.fn(), getItem: vi.fn(() => null) },
+            estaNubeListaPara: vi.fn(() => true),
+            puedeGuardarLocalPara: vi.fn(() => true),
             guardarYRenderizar: vi.fn().mockImplementation(async (motivo) => {
                 ordenEjecucion.push(`guardar:${motivo}`);
                 return { ok: true, destino: 'nube' };
@@ -472,7 +481,40 @@ describe('descarga de respaldo y cierre en app.js', () => {
         ]);
     });
 
-    it('cerrarPorInactividad debe limpiar finanzas_db_fallback y finanzas_db_<uid> si el usuario tiene cifrado activo', async () => {
+    it('cerrarPorInactividad NO debe guardar ni escribir finanzas_db_<uid> si estaNubeListaPara retorna false', async () => {
+        const setItemSpy = vi.fn();
+        const removeItemSpy = vi.fn();
+        const guardarYRenderizarSpy = vi.fn().mockResolvedValue({ ok: true });
+
+        const mocks = {
+            document: { getElementById: () => null },
+            db: { timestamp: 0 },
+            auth: { currentUser: { uid: 'usr_sin_cargar' } },
+            localStorage: {
+                getItem: vi.fn(() => null),
+                setItem: setItemSpy,
+                removeItem: removeItemSpy
+            },
+            estaNubeListaPara: vi.fn(() => false),
+            puedeGuardarLocalPara: vi.fn(() => false),
+            guardarYRenderizar: guardarYRenderizarSpy,
+            descargarJson: vi.fn(),
+            bloquearSesionCripto: vi.fn(),
+            authCerrarSesion: vi.fn().mockResolvedValue(),
+            mostrarPantallaLogin: vi.fn()
+        };
+
+        const cerrar = crearCerrarPorInactividad(mocks);
+        await cerrar();
+
+        expect(guardarYRenderizarSpy).not.toHaveBeenCalled();
+        expect(setItemSpy).not.toHaveBeenCalledWith('finanzas_db_usr_sin_cargar', expect.any(String));
+        expect(mocks.bloquearSesionCripto).toHaveBeenCalledWith('usr_sin_cargar');
+        expect(mocks.authCerrarSesion).toHaveBeenCalledTimes(1);
+        expect(mocks.mostrarPantallaLogin).toHaveBeenCalledTimes(1);
+    });
+
+    it('cerrarPorInactividad debe limpiar finanzas_db_fallback, finanzas_db_<uid>, compras y respaldos si el usuario tiene cifrado activo', async () => {
         const localItems = {
             'cero_conocimiento_activo_usr_cifrado': 'true',
             'finanzas_db_fallback': '{"datos":"sensibles"}',
@@ -480,6 +522,8 @@ describe('descarga de respaldo y cierre en app.js', () => {
         };
         const removeItemSpy = vi.fn((k) => { delete localItems[k]; });
         const setItemSpy = vi.fn();
+        const limpiarStorageComprasSpy = vi.fn();
+        const limpiarHistorialCopiasSpy = vi.fn();
 
         const mocks = {
             document: { getElementById: () => null },
@@ -490,6 +534,11 @@ describe('descarga de respaldo y cierre en app.js', () => {
                 setItem: setItemSpy,
                 removeItem: removeItemSpy
             },
+            estaNubeListaPara: vi.fn(() => true),
+            puedeGuardarLocalPara: vi.fn(() => true),
+            tieneCifradoActivoLocal: vi.fn(() => true),
+            limpiarStorageCompras: limpiarStorageComprasSpy,
+            limpiarHistorialCopias: limpiarHistorialCopiasSpy,
             guardarYRenderizar: vi.fn().mockResolvedValue({ ok: true }),
             descargarJson: vi.fn(),
             bloquearSesionCripto: vi.fn(),
@@ -504,9 +553,11 @@ describe('descarga de respaldo y cierre en app.js', () => {
         expect(setItemSpy).not.toHaveBeenCalledWith('finanzas_db_fallback', expect.any(String));
         expect(setItemSpy).not.toHaveBeenCalledWith('finanzas_db_usr_cifrado', expect.any(String));
 
-        // Debe limpiar ambos storages para prevenir fuga
+        // Debe limpiar ambos storages y purgar compras y respaldos locales para prevenir fuga
         expect(removeItemSpy).toHaveBeenCalledWith('finanzas_db_fallback');
         expect(removeItemSpy).toHaveBeenCalledWith('finanzas_db_usr_cifrado');
+        expect(limpiarStorageComprasSpy).toHaveBeenCalledWith('usr_cifrado');
+        expect(limpiarHistorialCopiasSpy).toHaveBeenCalledWith('usr_cifrado', mocks.localStorage);
         expect(mocks.bloquearSesionCripto).toHaveBeenCalledTimes(1);
         expect(mocks.authCerrarSesion).toHaveBeenCalledTimes(1);
     });

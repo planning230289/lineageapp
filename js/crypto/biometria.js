@@ -364,29 +364,19 @@ export function establecerClaveActiva(clave, pin = null, salt = null, usuarioId 
  * @returns {Promise<boolean>} Retorna true si se re-derivó y restauró la clave activa, o false si no hay sesión
  */
 export async function restaurarSesionCriptoDesdeSessionStorage(usuarioId = null) {
-    // 1. Revisar primero sessionStorage (recargas F5 estándar en navegador de escritorio o móvil con storage intacto)
+    if (typeof usuarioId !== 'string' || usuarioId.trim() === '') {
+        return false;
+    }
+    const uid = usuarioId.trim();
+
+    // 1. Revisar primero sessionStorage (recargas F5 estándar) EXCLUSIVAMENTE para este usuarioId
     if (typeof sessionStorage !== 'undefined') {
         try {
-            let rawData = null;
-            if (usuarioId) {
-                rawData = sessionStorage.getItem(`${STORAGE_KEY_SESSION_PREFIX}${usuarioId}`);
-            }
-            if (!rawData) {
-                rawData = sessionStorage.getItem(`${STORAGE_KEY_SESSION_PREFIX}activa`);
-            }
-            if (!rawData) {
-                for (let i = 0; i < sessionStorage.length; i++) {
-                    const k = sessionStorage.key(i);
-                    if (k && k.startsWith(STORAGE_KEY_SESSION_PREFIX)) {
-                        rawData = sessionStorage.getItem(k);
-                        break;
-                    }
-                }
-            }
-
+            const rawData = sessionStorage.getItem(`${STORAGE_KEY_SESSION_PREFIX}${uid}`);
             if (rawData) {
                 const sesion = JSON.parse(rawData);
-                if (sesion && sesion.pin && sesion.salt) {
+                const coincideUsuario = !sesion?.usuarioId || sesion.usuarioId === uid;
+                if (sesion && sesion.pin && sesion.salt && coincideUsuario) {
                     const clave = await derivarClave(sesion.pin, sesion.salt);
                     _claveActiva = clave;
                     _pinActivo = sesion.pin;
@@ -399,26 +389,10 @@ export async function restaurarSesionCriptoDesdeSessionStorage(usuarioId = null)
         }
     }
 
-    // 2. Persistencia móvil secundaria ante pull-to-refresh (Android / iOS aislando sessionStorage)
+    // 2. Persistencia móvil secundaria ante pull-to-refresh EXCLUSIVAMENTE para este usuarioId
     if (typeof localStorage !== 'undefined') {
         try {
-            let rawBioData = null;
-            let uidEfectivo = usuarioId;
-
-            if (usuarioId) {
-                rawBioData = localStorage.getItem(`${STORAGE_KEY_SESSION_BIO_PREFIX}${usuarioId}`);
-            }
-            if (!rawBioData) {
-                for (let i = 0; i < localStorage.length; i++) {
-                    const k = localStorage.key(i);
-                    if (k && k.startsWith(STORAGE_KEY_SESSION_BIO_PREFIX)) {
-                        rawBioData = localStorage.getItem(k);
-                        uidEfectivo = k.replace(STORAGE_KEY_SESSION_BIO_PREFIX, '');
-                        break;
-                    }
-                }
-            }
-
+            const rawBioData = localStorage.getItem(`${STORAGE_KEY_SESSION_BIO_PREFIX}${uid}`);
             if (rawBioData) {
                 const sesionBio = JSON.parse(rawBioData);
                 const ahora = Date.now();
@@ -429,25 +403,21 @@ export async function restaurarSesionCriptoDesdeSessionStorage(usuarioId = null)
                         _pinActivo = sesionBio.pin;
                         _saltActivo = sesionBio.salt;
 
-                        // Refrescar timestamp de actividad
+                        // Refrescar timestamp de actividad solo para este usuarioId
                         sesionBio.timestamp = ahora;
-                        if (uidEfectivo) {
-                            localStorage.setItem(`${STORAGE_KEY_SESSION_BIO_PREFIX}${uidEfectivo}`, JSON.stringify(sesionBio));
-                            if (typeof sessionStorage !== 'undefined') {
-                                sessionStorage.setItem(`${STORAGE_KEY_SESSION_PREFIX}${uidEfectivo}`, JSON.stringify({
-                                    pin: sesionBio.pin,
-                                    salt: sesionBio.salt,
-                                    usuarioId: uidEfectivo,
-                                    timestamp: ahora
-                                }));
-                            }
+                        localStorage.setItem(`${STORAGE_KEY_SESSION_BIO_PREFIX}${uid}`, JSON.stringify(sesionBio));
+                        if (typeof sessionStorage !== 'undefined') {
+                            sessionStorage.setItem(`${STORAGE_KEY_SESSION_PREFIX}${uid}`, JSON.stringify({
+                                pin: sesionBio.pin,
+                                salt: sesionBio.salt,
+                                usuarioId: uid,
+                                timestamp: ahora
+                            }));
                         }
                         return true;
                     } else {
                         // Expirado (más de 15 minutos sin uso): limpiar
-                        if (uidEfectivo) {
-                            localStorage.removeItem(`${STORAGE_KEY_SESSION_BIO_PREFIX}${uidEfectivo}`);
-                        }
+                        localStorage.removeItem(`${STORAGE_KEY_SESSION_BIO_PREFIX}${uid}`);
                     }
                 }
             }

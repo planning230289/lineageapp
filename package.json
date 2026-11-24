@@ -1,6 +1,6 @@
 {
   "name": "control-financiero-app",
-  "version": "15.9.1",
+  "version": "15.10.0",
   "description": "Aplicación de control financiero personal con PWA",
   "type": "module",
   "scripts": {

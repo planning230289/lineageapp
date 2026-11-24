@@ -215,6 +215,26 @@ describe('Módulo de Biometría y Sesión Criptográfica (Fase 2)', () => {
 
             expect(localStorage.getItem(`cero_conocimiento_sesion_bio_${uid}`)).toBeNull();
         });
+
+        it('NO debe restaurar sesión cripto de otro UID ni sin usuarioId (prevención cross-UID)', async () => {
+            sessionStorage.setItem('cero_conocimiento_sesion_user_A', JSON.stringify({
+                pin: '1234',
+                salt: 'saltA',
+                usuarioId: 'user_A',
+                timestamp: Date.now()
+            }));
+            localStorage.setItem('cero_conocimiento_sesion_bio_user_A', JSON.stringify({
+                pin: '1234',
+                salt: 'saltA',
+                timestamp: Date.now()
+            }));
+
+            expect(await restaurarSesionCriptoDesdeSessionStorage(null)).toBe(false);
+            expect(await restaurarSesionCriptoDesdeSessionStorage('')).toBe(false);
+            expect(await restaurarSesionCriptoDesdeSessionStorage('user_B')).toBe(false);
+            expect(estaSesionDesbloqueada()).toBe(false);
+            expect(obtenerClaveActiva()).toBeNull();
+        });
     });
 
     describe('Protección contra Fuerza Bruta (Backoff Exponencial)', () => {

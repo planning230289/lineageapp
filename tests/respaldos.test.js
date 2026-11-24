@@ -3,6 +3,8 @@ import {
     CLAVE_INDICE_ROTACION,
     CLAVE_HISTORIAL_COPIAS,
     LIMITE_MAXIMO_COPIAS,
+    obtenerClaveIndiceRotacion,
+    obtenerClaveHistorialCopias,
     obtenerIndiceRotacion,
     avanzarIndiceRotacion,
     generarNombreCopiaRotativa,
@@ -11,7 +13,8 @@ import {
     obtenerHistorialCopias,
     purgarCopiasAntiguas,
     guardarSnapshotEnHistorial,
-    restaurarCopiaDesdeHistorial
+    restaurarCopiaDesdeHistorial,
+    limpiarHistorialCopias
 } from '../js/core/respaldos.js';
 
 function crearStorageFalso() {
@@ -168,6 +171,48 @@ describe('Módulo de Respaldos Rotativos (js/core/respaldos.js)', () => {
             const fecha = new Date(2026, 9, 22, 15, 30);
             const str = formatearFechaCopia(fecha);
             expect(str).toBe('22/10/2026, 15:30');
+        });
+    });
+
+    describe('aislamiento por UID y limpieza de historial', () => {
+        it('debe construir claves aisladas cuando se pasa usuarioId y globales cuando se omite', () => {
+            expect(obtenerClaveIndiceRotacion()).toBe(CLAVE_INDICE_ROTACION);
+            expect(obtenerClaveHistorialCopias()).toBe(CLAVE_HISTORIAL_COPIAS);
+            expect(obtenerClaveIndiceRotacion('uid_A')).toBe(`${CLAVE_INDICE_ROTACION}_uid_A`);
+            expect(obtenerClaveHistorialCopias('uid_A')).toBe(`${CLAVE_HISTORIAL_COPIAS}_uid_A`);
+        });
+
+        it('debe aislar completamente el historial e índice entre usuarios distintos', () => {
+            const bkA = guardarSnapshotEnHistorial({ mesActivo: '2026-10', usuario: 'A' }, storage, 'uid_A');
+            const bkB = guardarSnapshotEnHistorial({ mesActivo: '2026-11', usuario: 'B' }, storage, 'uid_B');
+
+            const histA = obtenerHistorialCopias(storage, 'uid_A');
+            const histB = obtenerHistorialCopias(storage, 'uid_B');
+            const histGlobal = obtenerHistorialCopias(storage);
+
+            expect(histA).toHaveLength(1);
+            expect(histA[0].data.usuario).toBe('A');
+            expect(histB).toHaveLength(1);
+            expect(histB[0].data.usuario).toBe('B');
+            expect(histGlobal).toHaveLength(0);
+
+            expect(restaurarCopiaDesdeHistorial(bkA.id, storage, 'uid_B')).toBeNull();
+            expect(restaurarCopiaDesdeHistorial(bkB.id, storage, 'uid_B')).toEqual({ mesActivo: '2026-11', usuario: 'B' });
+        });
+
+        it('limpiarHistorialCopias debe purgar tanto las claves del UID como las claves globales heredadas', () => {
+            guardarSnapshotEnHistorial({ mesActivo: '2026-10' }, storage, 'uid_A');
+            guardarSnapshotEnHistorial({ mesActivo: '2026-09' }, storage);
+            guardarSnapshotEnHistorial({ mesActivo: '2026-11' }, storage, 'uid_B');
+
+            expect(limpiarHistorialCopias('uid_A', storage)).toBe(true);
+
+            expect(obtenerHistorialCopias(storage, 'uid_A')).toEqual([]);
+            expect(obtenerHistorialCopias(storage)).toEqual([]);
+            expect(storage.getItem(obtenerClaveIndiceRotacion('uid_A'))).toBeNull();
+            expect(storage.getItem(CLAVE_INDICE_ROTACION)).toBeNull();
+            // No debe tocar el historial de otro usuario
+            expect(obtenerHistorialCopias(storage, 'uid_B')).toHaveLength(1);
         });
     });
 });

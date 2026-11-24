@@ -11,17 +11,53 @@ export const CLAVE_INDICE_ROTACION = 'finanzas_backup_rotacion_index';
 export const CLAVE_HISTORIAL_COPIAS = 'finanzas_copias_respaldo_historial';
 export const LIMITE_MAXIMO_COPIAS = 5;
 
+let _secuenciaCopia = 0;
+
+/**
+ * Normaliza el identificador de usuario para claves aisladas en storage.
+ * @param {string|null} [usuarioId=null]
+ * @returns {string|null}
+ */
+function normalizarUsuarioId(usuarioId = null) {
+    if (typeof usuarioId !== 'string') return null;
+    const limpio = usuarioId.trim();
+    return limpio.length > 0 ? limpio : null;
+}
+
+/**
+ * Devuelve la clave de almacenamiento para el índice rotativo, aislada por UID si existe.
+ *
+ * @param {string|null} [usuarioId=null]
+ * @returns {string}
+ */
+export function obtenerClaveIndiceRotacion(usuarioId = null) {
+    const uid = normalizarUsuarioId(usuarioId);
+    return uid ? `${CLAVE_INDICE_ROTACION}_${uid}` : CLAVE_INDICE_ROTACION;
+}
+
+/**
+ * Devuelve la clave de almacenamiento para el historial de copias, aislada por UID si existe.
+ *
+ * @param {string|null} [usuarioId=null]
+ * @returns {string}
+ */
+export function obtenerClaveHistorialCopias(usuarioId = null) {
+    const uid = normalizarUsuarioId(usuarioId);
+    return uid ? `${CLAVE_HISTORIAL_COPIAS}_${uid}` : CLAVE_HISTORIAL_COPIAS;
+}
+
 /**
  * Obtiene el índice actual de rotación (entre 1 y 5).
  * Si no está definido o es inválido, devuelve 1.
  *
  * @param {Storage|Object} [almacenamiento=localStorage]
+ * @param {string|null} [usuarioId=null]
  * @returns {number}
  */
-export function obtenerIndiceRotacion(almacenamiento = (typeof localStorage !== 'undefined' ? localStorage : null)) {
+export function obtenerIndiceRotacion(almacenamiento = (typeof localStorage !== 'undefined' ? localStorage : null), usuarioId = null) {
     if (!almacenamiento) return 1;
     try {
-        const val = almacenamiento.getItem(CLAVE_INDICE_ROTACION);
+        const val = almacenamiento.getItem(obtenerClaveIndiceRotacion(usuarioId));
         const num = parseInt(val, 10);
         if (Number.isInteger(num) && num >= 1 && num <= LIMITE_MAXIMO_COPIAS) {
             return num;
@@ -35,14 +71,15 @@ export function obtenerIndiceRotacion(almacenamiento = (typeof localStorage !== 
  * Devuelve el nuevo número asignado (1 a 5).
  *
  * @param {Storage|Object} [almacenamiento=localStorage]
+ * @param {string|null} [usuarioId=null]
  * @returns {number}
  */
-export function avanzarIndiceRotacion(almacenamiento = (typeof localStorage !== 'undefined' ? localStorage : null)) {
-    const actual = obtenerIndiceRotacion(almacenamiento);
+export function avanzarIndiceRotacion(almacenamiento = (typeof localStorage !== 'undefined' ? localStorage : null), usuarioId = null) {
+    const actual = obtenerIndiceRotacion(almacenamiento, usuarioId);
     const siguiente = actual >= LIMITE_MAXIMO_COPIAS ? 1 : actual + 1;
     if (almacenamiento) {
         try {
-            almacenamiento.setItem(CLAVE_INDICE_ROTACION, String(siguiente));
+            almacenamiento.setItem(obtenerClaveIndiceRotacion(usuarioId), String(siguiente));
         } catch (_) {}
     }
     return siguiente;
@@ -53,12 +90,13 @@ export function avanzarIndiceRotacion(almacenamiento = (typeof localStorage !== 
  *
  * @param {number} [indice]
  * @param {Storage|Object} [almacenamiento]
+ * @param {string|null} [usuarioId=null]
  * @returns {string} Ej: "Finanzas_Lineage_Copia_1.json"
  */
-export function generarNombreCopiaRotativa(indice = null, almacenamiento = (typeof localStorage !== 'undefined' ? localStorage : null)) {
+export function generarNombreCopiaRotativa(indice = null, almacenamiento = (typeof localStorage !== 'undefined' ? localStorage : null), usuarioId = null) {
     let num = indice;
     if (typeof num !== 'number' || num < 1 || num > LIMITE_MAXIMO_COPIAS) {
-        num = obtenerIndiceRotacion(almacenamiento);
+        num = obtenerIndiceRotacion(almacenamiento, usuarioId);
     }
     return `Finanzas_Lineage_Copia_${num}.json`;
 }
@@ -134,12 +172,13 @@ export function extraerResumenBase(data) {
  * Ordenadas desde la más reciente a la más antigua.
  *
  * @param {Storage|Object} [almacenamiento=localStorage]
+ * @param {string|null} [usuarioId=null]
  * @returns {Array<{ id: string, numero: number, fecha: string, timestamp: number, data: Object, saldoNeto: string|null, resumen: string }>}
  */
-export function obtenerHistorialCopias(almacenamiento = (typeof localStorage !== 'undefined' ? localStorage : null)) {
+export function obtenerHistorialCopias(almacenamiento = (typeof localStorage !== 'undefined' ? localStorage : null), usuarioId = null) {
     if (!almacenamiento) return [];
     try {
-        const crudo = almacenamiento.getItem(CLAVE_HISTORIAL_COPIAS);
+        const crudo = almacenamiento.getItem(obtenerClaveHistorialCopias(usuarioId));
         if (!crudo) return [];
         const arr = JSON.parse(crudo);
         if (Array.isArray(arr)) {
@@ -155,15 +194,16 @@ export function obtenerHistorialCopias(almacenamiento = (typeof localStorage !==
  * Purga el historial asegurando que solo se conserven las 5 copias más recientes.
  *
  * @param {Storage|Object} [almacenamiento=localStorage]
+ * @param {string|null} [usuarioId=null]
  * @returns {Array} Copias restantes (máximo 5)
  */
-export function purgarCopiasAntiguas(almacenamiento = (typeof localStorage !== 'undefined' ? localStorage : null)) {
+export function purgarCopiasAntiguas(almacenamiento = (typeof localStorage !== 'undefined' ? localStorage : null), usuarioId = null) {
     if (!almacenamiento) return [];
     try {
-        const copias = obtenerHistorialCopias(almacenamiento);
+        const copias = obtenerHistorialCopias(almacenamiento, usuarioId);
         // Si hay más de 5, conservar solo las primeras 5 (las más recientes)
         const conservadas = copias.slice(0, LIMITE_MAXIMO_COPIAS);
-        almacenamiento.setItem(CLAVE_HISTORIAL_COPIAS, JSON.stringify(conservadas));
+        almacenamiento.setItem(obtenerClaveHistorialCopias(usuarioId), JSON.stringify(conservadas));
         return conservadas;
     } catch (e) {
         console.warn('[respaldos] Error al purgar copias antiguas:', e);
@@ -177,16 +217,17 @@ export function purgarCopiasAntiguas(almacenamiento = (typeof localStorage !== '
  *
  * @param {Object} data - Objeto de datos a respaldar
  * @param {Storage|Object} [almacenamiento=localStorage]
+ * @param {string|null} [usuarioId=null]
  * @returns {{ id: string, numero: number, fecha: string, timestamp: number, nombreArchivo: string }}
  */
-export function guardarSnapshotEnHistorial(data, almacenamiento = (typeof localStorage !== 'undefined' ? localStorage : null)) {
+export function guardarSnapshotEnHistorial(data, almacenamiento = (typeof localStorage !== 'undefined' ? localStorage : null), usuarioId = null) {
     if (!data || typeof data !== 'object') {
         return null;
     }
 
-    const indiceActual = obtenerIndiceRotacion(almacenamiento);
+    const indiceActual = obtenerIndiceRotacion(almacenamiento, usuarioId);
     const ahora = Date.now();
-    const id = `backup_${ahora}_${indiceActual}`;
+    const id = `backup_${ahora}_${indiceActual}_${++_secuenciaCopia}`;
     const fecha = formatearFechaCopia(ahora);
     const { saldoNeto, resumen } = extraerResumenBase(data);
 
@@ -210,13 +251,13 @@ export function guardarSnapshotEnHistorial(data, almacenamiento = (typeof localS
 
     if (almacenamiento) {
         try {
-            const actuales = obtenerHistorialCopias(almacenamiento);
+            const actuales = obtenerHistorialCopias(almacenamiento, usuarioId);
             // Insertar al inicio (más reciente)
             const nuevoHistorial = [nuevaCopia, ...actuales].slice(0, LIMITE_MAXIMO_COPIAS);
-            almacenamiento.setItem(CLAVE_HISTORIAL_COPIAS, JSON.stringify(nuevoHistorial));
-            
+            almacenamiento.setItem(obtenerClaveHistorialCopias(usuarioId), JSON.stringify(nuevoHistorial));
+
             // Avanzar el índice cíclico para la próxima copia (1 a 5)
-            avanzarIndiceRotacion(almacenamiento);
+            avanzarIndiceRotacion(almacenamiento, usuarioId);
         } catch (e) {
             console.warn('[respaldos] Error al guardar snapshot en historial:', e);
         }
@@ -237,20 +278,46 @@ export function guardarSnapshotEnHistorial(data, almacenamiento = (typeof localS
  *
  * @param {string|Object} idOCopia
  * @param {Storage|Object} [almacenamiento=localStorage]
+ * @param {string|null} [usuarioId=null]
  * @returns {Object|null}
  */
-export function restaurarCopiaDesdeHistorial(idOCopia, almacenamiento = (typeof localStorage !== 'undefined' ? localStorage : null)) {
+export function restaurarCopiaDesdeHistorial(idOCopia, almacenamiento = (typeof localStorage !== 'undefined' ? localStorage : null), usuarioId = null) {
     if (!idOCopia) return null;
 
     if (typeof idOCopia === 'object' && idOCopia.data) {
         return JSON.parse(JSON.stringify(idOCopia.data));
     }
 
-    const copias = obtenerHistorialCopias(almacenamiento);
+    const copias = obtenerHistorialCopias(almacenamiento, usuarioId);
     const encontrada = copias.find(c => c.id === idOCopia || String(c.numero) === String(idOCopia));
     if (encontrada && encontrada.data) {
         return JSON.parse(JSON.stringify(encontrada.data));
     }
 
     return null;
+}
+
+/**
+ * Purga las claves del historial de copias y el índice rotativo del usuario
+ * y también las claves globales heredadas sin UID.
+ *
+ * @param {string|null} [usuarioId=null]
+ * @param {Storage|Object} [almacenamiento=localStorage]
+ * @returns {boolean}
+ */
+export function limpiarHistorialCopias(usuarioId = null, almacenamiento = (typeof localStorage !== 'undefined' ? localStorage : null)) {
+    if (!almacenamiento || typeof almacenamiento.removeItem !== 'function') return false;
+    try {
+        const uid = normalizarUsuarioId(usuarioId);
+        if (uid) {
+            almacenamiento.removeItem(obtenerClaveHistorialCopias(uid));
+            almacenamiento.removeItem(obtenerClaveIndiceRotacion(uid));
+        }
+        almacenamiento.removeItem(CLAVE_HISTORIAL_COPIAS);
+        almacenamiento.removeItem(CLAVE_INDICE_ROTACION);
+        return true;
+    } catch (e) {
+        console.warn('[respaldos] Error al limpiar historial de copias:', e);
+        return false;
+    }
 }

@@ -93,6 +93,24 @@ describe('suscribirAvisosPersistencia: errores', () => {
         bus.emitir('db:error', { operacion: 'guardar', error: new Error('boom') });
         expect(silencioConsola).toHaveBeenCalled();
     });
+
+    it('debe mostrar aviso dedicado cuando motivo es nube-no-lista o sesion-bloqueada', () => {
+        montar();
+        bus.emitir('db:error', { operacion: 'guardar', motivo: 'nube-no-lista' });
+        bus.emitir('db:error', { operacion: 'guardar', motivo: 'sesion-bloqueada' });
+
+        expect(notificarError).toHaveBeenCalledTimes(2);
+        expect(notificarError).toHaveBeenNthCalledWith(
+            1,
+            MENSAJE_FALLA['nube-no-lista'],
+            { clave: 'db-error-nube-no-lista' }
+        );
+        expect(notificarError).toHaveBeenNthCalledWith(
+            2,
+            MENSAJE_FALLA['sesion-bloqueada'],
+            { clave: 'db-error-sesion-bloqueada' }
+        );
+    });
 });
 
 describe('suscribirAvisosPersistencia: guardado manual', () => {

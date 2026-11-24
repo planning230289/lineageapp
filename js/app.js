@@ -10,7 +10,11 @@ import {
     iniciarSesionGoogle as authIniciarSesionGoogle,
     cerrarSesion as authCerrarSesion,
     auth,
-    descargarJson
+    descargarJson,
+    estaNubeListaPara,
+    puedeGuardarLocalPara,
+    marcarCifradoConfirmado,
+    tieneCifradoActivoLocal
 } from './db.js';
 import { calcularNetoMes, calcularGastosMes, calcularPasivoPorKeyword, formatARS, obtenerMesActual, esPagado, normalizarCategoria, normalizarTexto, aNumero, mesDesplazado, slug, parsearCuota, formatearCuota, valorCalculadoIngreso } from './calculos.js';
 import { renderizarDeseosYProyeccion } from './deseos.js';
@@ -49,7 +53,8 @@ import {
     toggleAcordeonCompra,
     expandirTodasCompras,
     contraerTodasCompras,
-    poblarSelectCategorias
+    poblarSelectCategorias,
+    limpiarStorageCompras
 } from './compras.js';
 import {
     renderizarInstructivos,
@@ -69,7 +74,8 @@ import {
     obtenerHistorialCopias,
     purgarCopiasAntiguas,
     restaurarCopiaDesdeHistorial,
-    generarNombreCopiaRotativa
+    generarNombreCopiaRotativa,
+    limpiarHistorialCopias
 } from './core/respaldos.js';
 import {
     abrirModalConfigurarCifrado,
@@ -288,67 +294,76 @@ export async function handleIniciarSesionGoogle() {
    login, que es lo primero que va a ver.
    ========================================================= */
 let controlInactividad = null;
+let cierreSesionEnCurso = false;
 
 export async function cerrarPorInactividad() {
     const estado = document.getElementById('debug-app-status');
     if (estado) estado.textContent = 'Sesión cerrada por inactividad. Se guardaron los cambios.';
 
     const uid = auth.currentUser?.uid;
+    const nubeLista = typeof estaNubeListaPara === 'function' ? estaNubeListaPara(uid) : false;
+    const seguroLocal = typeof puedeGuardarLocalPara === 'function' ? puedeGuardarLocalPara(uid, db) : nubeLista;
     const tieneCifrado = Boolean(
-        uid && typeof localStorage !== 'undefined' && (
-            localStorage.getItem(`cero_conocimiento_activo_${uid}`) === 'true' ||
-            localStorage.getItem(`cero_conocimiento_salt_${uid}`)
+        uid && (
+            (typeof tieneCifradoActivoLocal === 'function' && tieneCifradoActivoLocal(uid)) ||
+            (typeof localStorage !== 'undefined' && (
+                localStorage.getItem(`cero_conocimiento_activo_${uid}`) === 'true' ||
+                localStorage.getItem(`cero_conocimiento_salt_${uid}`)
+            ))
         )
     );
 
-    // 1. Guardado local prioritario e inmediato con timestamp (si no tiene cifrado activo)
+    // 1. Guardado local prioritario e inmediato aislado por uid (solo si la nube fue cargada, es seguro y no tiene cifrado activo)
     const ahora = Date.now();
     try {
-        db.timestamp = ahora;
         if (typeof localStorage !== 'undefined') {
+            localStorage.removeItem('finanzas_db_fallback');
             if (tieneCifrado) {
                 // Prevenir fuga de datos financieros sin cifrar en reposo
-                localStorage.removeItem('finanzas_db_fallback');
                 if (uid) {
                     localStorage.removeItem(`finanzas_db_${uid}`);
                 }
-            } else {
-                localStorage.setItem('finanzas_db_fallback', JSON.stringify(db));
-                if (uid) {
-                    localStorage.setItem(`finanzas_db_${uid}`, JSON.stringify({ db, timestamp: ahora }));
-                }
+                if (typeof limpiarStorageCompras === 'function') limpiarStorageCompras(uid);
+                if (typeof limpiarHistorialCopias === 'function') limpiarHistorialCopias(uid, localStorage);
+            } else if (uid && seguroLocal) {
+                db.timestamp = ahora;
+                localStorage.setItem(`finanzas_db_${uid}`, JSON.stringify({ db, timestamp: ahora }));
             }
         }
     } catch (e) {
         console.warn('[Inactividad] Error en guardado local prioritario:', e);
     }
 
-    // 2. Intentar guardar en la nube sin bloquear indefinidamente
-    try {
-        await Promise.race([
-            guardarYRenderizar('cierre'),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout persistencia nube')), 3000))
-        ]);
-    } catch (errNube) {
-        console.warn('[Inactividad] Guardado remoto omitido o con demora, copia local preservada:', errNube);
+    // 2. Intentar guardar en la nube sin bloquear indefinidamente (solo si la nube estaba lista para este uid)
+    if (nubeLista) {
+        try {
+            await Promise.race([
+                guardarYRenderizar('cierre'),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout persistencia nube')), 3000))
+            ]);
+        } catch (errNube) {
+            console.warn('[Inactividad] Guardado remoto omitido o con demora, copia local preservada:', errNube);
+        }
     }
 
-    // 3. Confirmar persistencia local segura
+    // 3. Confirmar persistencia local segura aislada por uid
     try {
         if (typeof localStorage !== 'undefined') {
+            localStorage.removeItem('finanzas_db_fallback');
             if (tieneCifrado) {
-                localStorage.removeItem('finanzas_db_fallback');
                 if (uid) {
                     localStorage.removeItem(`finanzas_db_${uid}`);
                 }
-            } else if (uid) {
+                if (typeof limpiarStorageCompras === 'function') limpiarStorageCompras(uid);
+                if (typeof limpiarHistorialCopias === 'function') limpiarHistorialCopias(uid, localStorage);
+            } else if (uid && seguroLocal) {
                 localStorage.setItem(`finanzas_db_${uid}`, JSON.stringify({ db, timestamp: Date.now() }));
             }
         }
     } catch (_) {}
 
     // 4. Bloqueo criptográfico y cierre seguro sin descarga automática forzada
-    bloquearSesionCripto();
+    bloquearSesionCripto(uid);
     await authCerrarSesion();
     mostrarPantallaLogin();
 }
@@ -379,70 +394,89 @@ export function detenerInactividad() {
 }
 
 export async function handleCerrarSesion() {
-    // Antes de cerrar: si el logout es manual, el control se
-    // desarma. Si no, el primer clic en la pantalla de login lo
-    // rearma con la sesión ya cerrada.
-    try {
-        detenerAutoguardado();
-    } catch (_) {}
-    detenerInactividad();
+    if (cierreSesionEnCurso) return;
+    cierreSesionEnCurso = true;
 
-    const uid = auth.currentUser?.uid;
-    const tieneCifrado = Boolean(
-        uid && typeof localStorage !== 'undefined' && (
-            localStorage.getItem(`cero_conocimiento_activo_${uid}`) === 'true' ||
-            localStorage.getItem(`cero_conocimiento_salt_${uid}`)
-        )
-    );
-
-    // 1. Guardado local prioritario e inmediato con timestamp (si no tiene cifrado activo)
-    const ahora = Date.now();
     try {
-        db.timestamp = ahora;
-        if (typeof localStorage !== 'undefined') {
-            if (tieneCifrado) {
+        // Antes de cerrar: si el logout es manual, el control se
+        // desarma. Si no, el primer clic en la pantalla de login lo
+        // rearma con la sesión ya cerrada.
+        try {
+            detenerAutoguardado();
+        } catch (_) {}
+        detenerInactividad();
+
+        const uid = auth.currentUser?.uid;
+        const nubeLista = typeof estaNubeListaPara === 'function' ? estaNubeListaPara(uid) : false;
+        const seguroLocal = typeof puedeGuardarLocalPara === 'function' ? puedeGuardarLocalPara(uid, db) : nubeLista;
+        const tieneCifrado = Boolean(
+            uid && (
+                (typeof tieneCifradoActivoLocal === 'function' && tieneCifradoActivoLocal(uid)) ||
+                (typeof localStorage !== 'undefined' && (
+                    localStorage.getItem(`cero_conocimiento_activo_${uid}`) === 'true' ||
+                    localStorage.getItem(`cero_conocimiento_salt_${uid}`)
+                ))
+            )
+        );
+
+        // 1. Guardado local prioritario e inmediato aislado por uid (solo si la nube fue cargada, es seguro y no tiene cifrado activo)
+        const ahora = Date.now();
+        try {
+            if (typeof localStorage !== 'undefined') {
                 localStorage.removeItem('finanzas_db_fallback');
-                if (uid) {
-                    localStorage.removeItem(`finanzas_db_${uid}`);
-                }
-            } else {
-                localStorage.setItem('finanzas_db_fallback', JSON.stringify(db));
-                if (uid) {
+                if (tieneCifrado) {
+                    if (uid) {
+                        localStorage.removeItem(`finanzas_db_${uid}`);
+                    }
+                    if (typeof limpiarStorageCompras === 'function') limpiarStorageCompras(uid);
+                    if (typeof limpiarHistorialCopias === 'function') limpiarHistorialCopias(uid, localStorage);
+                } else if (uid && seguroLocal) {
+                    db.timestamp = ahora;
                     localStorage.setItem(`finanzas_db_${uid}`, JSON.stringify({ db, timestamp: ahora }));
                 }
             }
+        } catch (e) {
+            console.warn('[CerrarSesion] Error en guardado local prioritario:', e);
         }
-    } catch (e) {
-        console.warn('[CerrarSesion] Error en guardado local prioritario:', e);
-    }
 
-    // 2. Intentar guardar en nube sin bloquear
-    try {
-        await Promise.race([
-            guardarTodo('cierre'),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout nube')), 3000))
-        ]);
-    } catch (errNube) {
-        console.warn('[CerrarSesion] Guardado remoto con demora u omitido:', errNube);
-    }
-
-    // Asegurar limpieza de datos sensibles si tiene cifrado
-    try {
-        if (tieneCifrado && typeof localStorage !== 'undefined') {
-            localStorage.removeItem('finanzas_db_fallback');
-            if (uid) localStorage.removeItem(`finanzas_db_${uid}`);
+        // 2. Intentar guardar en nube sin bloquear (solo si la carga remota finalizó para este uid)
+        if (nubeLista) {
+            try {
+                await Promise.race([
+                    guardarTodo('cierre'),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout nube')), 3000))
+                ]);
+            } catch (errNube) {
+                console.warn('[CerrarSesion] Guardado remoto con demora u omitido:', errNube);
+            }
         }
-    } catch (_) {}
 
-    // 3. Desconectar sesión y destruir claves en memoria volátil
-    try {
-        bloquearSesionCripto();
-        await authCerrarSesion();
-        mostrarPantallaLogin();
-        const estado = document.getElementById('debug-app-status');
-        if (estado) estado.textContent = 'Sin sesión activa';
-    } catch (error) {
-        console.error('Error al cerrar sesión:', error);
+        // Asegurar limpieza de datos sensibles si tiene cifrado
+        try {
+            if (typeof localStorage !== 'undefined') {
+                localStorage.removeItem('finanzas_db_fallback');
+                if (tieneCifrado) {
+                    if (uid) {
+                        localStorage.removeItem(`finanzas_db_${uid}`);
+                    }
+                    if (typeof limpiarStorageCompras === 'function') limpiarStorageCompras(uid);
+                    if (typeof limpiarHistorialCopias === 'function') limpiarHistorialCopias(uid, localStorage);
+                }
+            }
+        } catch (_) {}
+
+        // 3. Desconectar sesión y destruir claves en memoria volátil
+        try {
+            bloquearSesionCripto(uid);
+            await authCerrarSesion();
+            mostrarPantallaLogin();
+            const estado = document.getElementById('debug-app-status');
+            if (estado) estado.textContent = 'Sin sesión activa';
+        } catch (error) {
+            console.error('Error al cerrar sesión:', error);
+        }
+    } finally {
+        cierreSesionEnCurso = false;
     }
 }
 
@@ -563,8 +597,13 @@ export async function forzarSincronizacion() {
         const estado = document.getElementById('debug-app-status');
         if (estado) estado.textContent = 'Sincronizando con Firebase…';
         
-        const resultado = await cargarBaseDatosRemota();
+        const resultado = await cargarBaseDatosRemota(null, { forzarDesdeNube: true });
         console.log('[Persistencia] Resultado de sincronización:', resultado);
+
+        if (resultado && (resultado.cancelado || resultado.obsoleta)) {
+            if (estado) estado.textContent = resultado.cancelado ? 'Desbloqueo cancelado' : 'Sincronización descartada';
+            return;
+        }
 
         // cargarBaseDatosRemota devuelve { user, database, error }
         if (resultado && resultado.error) {
@@ -641,29 +680,36 @@ export function importarRespaldoJSONAuto(event) {
             if (migracionesAplicadas.length > 0) {
                 notificarInfo(`Respaldo actualizado al esquema actual (migraciones: ${migracionesAplicadas.join(', ')}).`);
             }
-            // Fusionar: los datos importados pisan a los actuales, pero
-            // los campos de auth que ya existían se preservan SOLO si
-            // el JSON no los trae. Antes se hacía Object.assign(db, dbNueva,
-            // authPreserve) con authPreserve construido desde db (posiblemente
-            // undefined), lo que sobrescribía los valores importados con undefined.
+            // Eliminar cualquier campo de identidad ajeno del respaldo y limpiar claves viejas de db
             const camposAuth = ['usuario', 'uid', 'user'];
             const preservar = {};
             for (const campo of camposAuth) {
-                if (db[campo] != null && dbNueva[campo] == null) {
+                if (db[campo] != null) {
                     preservar[campo] = db[campo];
                 }
             }
+            delete dbNueva.uid;
+            delete dbNueva.usuario;
+            delete dbNueva.user;
+
+            Object.keys(db).forEach(k => delete db[k]);
             Object.assign(db, dbNueva, preservar);
-            
+            if (!Array.isArray(db.compras)) db.compras = [];
+            if (!Array.isArray(db.comprasCategorias)) db.comprasCategorias = [];
+
             if (db.mesActivo) {
                 asegurarAnioEnSelect(db.mesActivo.split('-')[0]);
             }
-            
-            await guardarTodo('importacion');
+
+            const resGuardado = await guardarTodo('importacion');
             renderizarCuadriculaMeses();
             renderizarTodo();
             if (document.getElementById('tab-anual')?.classList.contains('active')) renderizarGraficoAnual();
-            notificarExito('Respaldo JSON importado y guardado en la nube con éxito');
+            if (resGuardado?.ok && resGuardado?.destino === 'nube') {
+                notificarExito('Respaldo JSON importado y guardado en la nube con éxito');
+            } else {
+                notificarAdvertencia('Respaldo JSON importado en memoria, pero no se pudo guardar en la nube. Verificá tu conexión o desbloqueo.');
+            }
         } catch (err) {
             console.error('Error procesando JSON:', err);
             mostrarNotificacion('El archivo seleccionado no es un JSON de respaldo válido.', 'error');
@@ -2068,11 +2114,11 @@ export async function guardarYRenderizar(motivo) {
     //    que no se tapa ningún error.
     const resultado = await guardado.catch((error) => { throw error; });
 
-    // Descargar JSON solo cuando el usuario apretó el botón
-    // "Guardar" ('manual'). Al cerrar por inactividad, la descarga
-    // se realiza de forma explícita y garantizada en cerrarPorInactividad.
+    // Descargar JSON solo cuando el usuario apretó el botón "Guardar" ('manual')
+    // y el guardado no fue bloqueado por candados de seguridad.
     const motivosConDescarga = new Set(['manual']);
-    if (motivosConDescarga.has(motivo || 'edicion')) {
+    const guardadoBloqueado = resultado?.ok === false && ['nube-no-lista', 'anti-borrado', 'bloqueado', 'sesion-bloqueada'].includes(resultado.motivo);
+    if (motivosConDescarga.has(motivo || 'edicion') && !guardadoBloqueado) {
         try {
             descargarJson(db, `cf_${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
             try {
@@ -3573,7 +3619,11 @@ export function handleCerrarModalConfigurarCifrado() {
 }
 export function tieneCifradoActivo(usuarioId = null) {
     const uid = usuarioId || auth?.currentUser?.uid;
-    if (!uid || typeof localStorage === 'undefined') return false;
+    if (!uid) return false;
+    if (typeof tieneCifradoActivoLocal === 'function' && tieneCifradoActivoLocal(uid)) {
+        return true;
+    }
+    if (typeof localStorage === 'undefined') return false;
     try {
         return Boolean(
             localStorage.getItem(`cero_conocimiento_salt_${uid}`) ||
@@ -3596,20 +3646,51 @@ export function actualizarBannerCeroConocimiento() {
 }
 
 export function handleGuardarConfiguracionCifrado(event) {
-    return guardarConfiguracionCifrado(event, auth?.currentUser?.uid, null, async (res) => {
-        try {
-            if (auth?.currentUser?.uid && res?.salt) {
-                localStorage.setItem(`cero_conocimiento_salt_${auth.currentUser.uid}`, res.salt);
-                localStorage.setItem(`cero_conocimiento_activo_${auth.currentUser.uid}`, 'true');
-            }
-        } catch (_) {}
-        actualizarBannerCeroConocimiento();
-        try {
-            await guardarTodo('activacion-cifrado');
+    const uid = auth?.currentUser?.uid;
+    if (!uid || !estaNubeListaPara(uid)) {
+        if (event && typeof event.preventDefault === 'function') event.preventDefault();
+        notificarError('Esperá a que termine la carga desde la nube antes de activar Cero Conocimiento.');
+        return Promise.resolve(false);
+    }
+
+    const teniaCifradoPrevio = tieneCifradoActivo(uid);
+    return guardarConfiguracionCifrado(event, uid, null, async (res) => {
+        const resGuardado = await guardarTodo('activacion-cifrado').catch((e) => ({
+            ok: false,
+            destino: 'local',
+            error: e
+        }));
+
+        if (resGuardado?.ok && resGuardado?.destino === 'nube') {
+            try {
+                if (typeof localStorage !== 'undefined') {
+                    if (res?.salt) {
+                        localStorage.setItem(`cero_conocimiento_salt_${uid}`, res.salt);
+                    }
+                    localStorage.setItem(`cero_conocimiento_activo_${uid}`, 'true');
+                    localStorage.removeItem(`finanzas_db_${uid}`);
+                    localStorage.removeItem('finanzas_db_fallback');
+                }
+            } catch (_) {}
+            marcarCifradoConfirmado(uid);
+            limpiarStorageCompras(uid);
+            limpiarHistorialCopias(uid, typeof localStorage !== 'undefined' ? localStorage : null);
+            actualizarBannerCeroConocimiento();
             notificarExito('¡Cero Conocimiento activado! Tus finanzas quedaron 100% cifradas en la nube.');
-        } catch (e) {
-            console.error('[Cifrado] Error al migrar base a Firestore cifrado:', e);
-            notificarError('Error al guardar datos cifrados en la nube: ' + (e.message || String(e)));
+        } else {
+            if (!teniaCifradoPrevio) {
+                try {
+                    if (typeof localStorage !== 'undefined') {
+                        localStorage.removeItem(`cero_conocimiento_salt_${uid}`);
+                        localStorage.removeItem(`cero_conocimiento_activo_${uid}`);
+                    }
+                } catch (_) {}
+                bloquearSesionCripto(uid);
+            }
+            actualizarBannerCeroConocimiento();
+            const detalle = resGuardado?.error?.message || resGuardado?.motivo || 'sin confirmación de la nube';
+            console.error('[Cifrado] Error al migrar base a Firestore cifrado:', resGuardado);
+            notificarError(`No se pudo activar Cero Conocimiento: falló el guardado en la nube (${detalle}).`);
         }
     });
 }
@@ -3639,10 +3720,12 @@ export function handleTecladoPinLimpiar() {
 }
 export function handleCancelarDesbloqueoOCerrar() {
     cancelarDesbloqueoOCerrar();
-    handleCerrarSesion();
+    if (!cierreSesionEnCurso) {
+        handleCerrarSesion();
+    }
 }
 export function handleBloquearFinanzas() {
-    bloquearSesionCripto();
+    bloquearSesionCripto(auth?.currentUser?.uid);
     notificarInfo('Sesión cifrada bloqueada');
     abrirModalDesbloquearCifrado({
         usuarioId: auth?.currentUser?.uid,
@@ -3664,7 +3747,20 @@ export function renderizarListaRespaldosModal() {
     const contenedor = document.getElementById('lista-copias-respaldo');
     if (!contenedor) return;
 
-    const copias = obtenerHistorialCopias();
+    const uid = auth?.currentUser?.uid || null;
+    if (uid && tieneCifradoActivo(uid)) {
+        contenedor.innerHTML = `
+            <div class="p-6 text-center text-indigo-700 bg-indigo-50 rounded-xl border border-indigo-200">
+                <i class="fa-solid fa-shield-halved text-2xl mb-2 text-indigo-500"></i>
+                <p class="text-xs font-bold">Historial local desactivado en modo Cero Conocimiento</p>
+                <p class="text-[11px] text-indigo-600 mt-1">Para proteger tu privacidad, no se guardan copias en texto plano en este navegador. Podés descargar respaldos manuales cuando lo necesites.</p>
+            </div>
+        `;
+        return;
+    }
+
+    const storage = typeof localStorage !== 'undefined' ? localStorage : null;
+    const copias = obtenerHistorialCopias(storage, uid);
     if (!copias || copias.length === 0) {
         contenedor.innerHTML = `
             <div class="p-6 text-center text-gray-400 bg-gray-50 rounded-xl border border-dashed border-gray-200">
@@ -3678,17 +3774,20 @@ export function renderizarListaRespaldosModal() {
 
     let html = '';
     copias.forEach((copia) => {
-        const nombreArchivo = `Finanzas_Lineage_Copia_${copia.numero}.json`;
-        const resumenTexto = copia.resumen || 'Copia de respaldo';
+        const idSeguro = escapeHTML(String(copia.id ?? ''));
+        const numeroSeguro = escapeHTML(String(copia.numero ?? ''));
+        const fechaSegura = escapeHTML(copia.fecha || 'Sin fecha');
+        const nombreArchivo = escapeHTML(`Finanzas_Lineage_Copia_${copia.numero}.json`);
+        const resumenTexto = escapeHTML(copia.resumen || 'Copia de respaldo');
         html += `
             <div class="p-3 bg-white border border-gray-200 hover:border-indigo-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm transition">
                 <div class="space-y-1">
                     <div class="flex items-center gap-2">
                         <span class="px-2 py-0.5 text-[10px] font-bold rounded-md bg-indigo-100 text-indigo-800 border border-indigo-200">
-                            Copia #${copia.numero}
+                            Copia #${numeroSeguro}
                         </span>
                         <span class="text-xs font-semibold text-gray-700">
-                            ${copia.fecha || 'Sin fecha'}
+                            ${fechaSegura}
                         </span>
                     </div>
                     <div class="text-[11px] text-gray-500 flex items-center gap-1.5">
@@ -3699,11 +3798,11 @@ export function renderizarListaRespaldosModal() {
                     </div>
                 </div>
                 <div class="flex items-center gap-2 flex-shrink-0 pt-1 sm:pt-0">
-                    <button type="button" onclick="window.accionRestaurarCopia('${copia.id}')" class="flex-1 sm:flex-none px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 transition shadow-sm" title="Restaurar este estado">
+                    <button type="button" onclick="window.accionRestaurarCopia('${idSeguro}')" class="flex-1 sm:flex-none px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 transition shadow-sm" title="Restaurar este estado">
                         <i class="fa-solid fa-rotate-left"></i>
                         <span>Restaurar</span>
                     </button>
-                    <button type="button" onclick="window.accionDescargarCopia('${copia.id}')" class="flex-1 sm:flex-none px-3 py-1.5 bg-slate-700 hover:bg-slate-800 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 transition shadow-sm" title="Descargar archivo JSON">
+                    <button type="button" onclick="window.accionDescargarCopia('${idSeguro}')" class="flex-1 sm:flex-none px-3 py-1.5 bg-slate-700 hover:bg-slate-800 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 transition shadow-sm" title="Descargar archivo JSON">
                         <i class="fa-solid fa-download"></i>
                         <span>Descargar</span>
                     </button>
@@ -3727,7 +3826,9 @@ export function cerrarModalRespaldos() {
 }
 
 export function accionPurgarCopiasViejas() {
-    const restantes = purgarCopiasAntiguas();
+    const uid = auth?.currentUser?.uid || null;
+    const storage = typeof localStorage !== 'undefined' ? localStorage : null;
+    const restantes = purgarCopiasAntiguas(storage, uid);
     renderizarListaRespaldosModal();
     notificarExito(`Copias depuradas con éxito. Se mantienen ${restantes.length} copias en el historial.`);
 }
@@ -3740,19 +3841,31 @@ export async function accionRestaurarCopia(idCopia) {
     if (!confirmacion) return;
 
     try {
-        const datos = restaurarCopiaDesdeHistorial(idCopia);
+        const uid = auth?.currentUser?.uid || null;
+        const storage = typeof localStorage !== 'undefined' ? localStorage : null;
+        const datos = restaurarCopiaDesdeHistorial(idCopia, storage, uid);
         if (!datos) {
             notificarError('No se encontró la copia seleccionada.');
             return;
         }
 
         const { base: baseLista } = prepararBase(datos);
+        delete baseLista.uid;
+        delete baseLista.usuario;
+        delete baseLista.user;
+
         Object.keys(db).forEach(k => delete db[k]);
         Object.assign(db, baseLista);
+        if (!Array.isArray(db.compras)) db.compras = [];
+        if (!Array.isArray(db.comprasCategorias)) db.comprasCategorias = [];
 
-        await guardarYRenderizar('manual');
+        const resGuardado = await guardarYRenderizar('manual');
         cerrarModalRespaldos();
-        notificarExito('¡Copia de respaldo restaurada y aplicada con éxito!');
+        if (resGuardado?.ok && resGuardado?.destino === 'nube') {
+            notificarExito('¡Copia de respaldo restaurada y guardada en la nube con éxito!');
+        } else {
+            notificarAdvertencia('La copia se restauró localmente, pero no se pudo sincronizar con la nube. Revisá tu conexión o desbloqueo.');
+        }
     } catch (err) {
         console.error('[respaldos] Error al restaurar copia:', err);
         notificarError('Error al restaurar copia: ' + (err.message || String(err)));
@@ -3761,7 +3874,9 @@ export async function accionRestaurarCopia(idCopia) {
 
 export function accionDescargarCopia(idCopia) {
     if (!idCopia) return;
-    const copias = obtenerHistorialCopias();
+    const uid = auth?.currentUser?.uid || null;
+    const storage = typeof localStorage !== 'undefined' ? localStorage : null;
+    const copias = obtenerHistorialCopias(storage, uid);
     const encontrada = copias.find(c => c.id === idCopia);
     if (!encontrada || !encontrada.data) {
         notificarError('No se encontró la copia para descargar.');
@@ -3831,13 +3946,13 @@ export async function initApp() {
             resultado = { user: null, database: null, error: e };
         }
 
-        if (!resultado || !resultado.user) {
+        if (!resultado || !resultado.user || resultado.cancelado || resultado.obsoleta || resultado.error?.message === 'DESBLOQUEO_CANCELADO') {
             mostrarPantallaLogin();
-            // Sin sesión no hay nada que proteger: el control queda
+            // Sin sesión válida o desbloqueo cancelado: el control queda
             // detenido para no dejar un temporizador corriendo.
             try { detenerAutoguardado(); } catch (_) {}
             detenerInactividad();
-            if (estado) estado.textContent = 'Sin sesión activa';
+            if (estado) estado.textContent = resultado?.cancelado ? 'Desbloqueo cancelado' : 'Sin sesión activa';
             return;
         }
 
@@ -3846,38 +3961,29 @@ export async function initApp() {
         // la nube). Pero si la lectura remota FALLÓ (reglas, red,
         // cuota), quedarse con la base vacía haría que la persona
         // pierda de vista todo lo guardado en este dispositivo sin
-        // ningún aviso. Sólo en ese caso se muestra la copia local,
-        // con el estado visible para que no se crea que está viendo
-        // la nube.
+        // ningún aviso. Sólo en ese caso (y jamás con Cero Conocimiento)
+        // se muestra la copia local, con el estado visible para que no
+        // se crea que está viendo la nube.
         if (resultado.error) {
-            let datosRestaurados = false;
-            try {
-                if (resultado.user?.uid) {
-                    const rawUserLocal = localStorage.getItem(`finanzas_db_${resultado.user.uid}`);
-                    if (rawUserLocal) {
-                        const parsed = JSON.parse(rawUserLocal);
-                        const datos = parsed?.db || parsed;
-                        const { base: baseLocal } = prepararBase(datos);
-                        Object.assign(db, baseLocal);
-                        datosRestaurados = true;
+            const conCifrado = resultado.user?.uid && tieneCifradoActivo(resultado.user.uid);
+            if (!conCifrado) {
+                try {
+                    if (resultado.user?.uid && typeof localStorage !== 'undefined') {
+                        const rawUserLocal = localStorage.getItem(`finanzas_db_${resultado.user.uid}`);
+                        if (rawUserLocal) {
+                            const parsed = JSON.parse(rawUserLocal);
+                            const datos = parsed?.db || parsed;
+                            const { base: baseLocal } = prepararBase(datos);
+                            Object.assign(db, baseLocal);
+                        }
                     }
+                } catch (eUser) {
+                    console.warn('[app] error leyendo finanzas_db_uid en fallback:', eUser);
                 }
-            } catch (eUser) {
-                console.warn('[app] error leyendo finanzas_db_uid en fallback:', eUser);
+                if (estado) estado.textContent = 'La nube no respondió: se muestra la copia local guardada en este dispositivo.';
+            } else {
+                if (estado) estado.textContent = 'No se pudo cargar tu información cifrada desde la nube.';
             }
-
-            if (!datosRestaurados) {
-                const fallback = localStorage.getItem('finanzas_db_fallback');
-                if (fallback) {
-                    try {
-                        const { base: baseLocal } = prepararBase(JSON.parse(fallback));
-                        Object.assign(db, baseLocal);
-                    } catch (e) {
-                        console.warn('[app] fallback local (arranque):', e);
-                    }
-                }
-            }
-            if (estado) estado.textContent = 'La nube no respondió: se muestra la copia local guardada en este dispositivo.';
         }
 
         ocultarPantallaLogin();

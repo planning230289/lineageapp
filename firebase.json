@@ -7,7 +7,21 @@
       "**/node_modules/**",
       "tests/**",
       "coverage/**",
-      ".github/**"
+      ".github/**",
+      "local/**",
+      "dist/**",
+      "build/**",
+      "js/Anteriores/**",
+      "firestore.rules",
+      "firestore.indexes.json",
+      "package.json",
+      "package-lock.json",
+      "vitest.config.js",
+      "README.md",
+      "*.log",
+      "*.tmp",
+      "*.bak",
+      "*.env*"
     ],
     "rewrites": [
       {

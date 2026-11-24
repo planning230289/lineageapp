@@ -15,11 +15,17 @@ import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/fireb
 import { busEventos } from "./core/eventos.js";
 import { APP_VERSION, SCHEMA_VERSION } from "./version.js";
 import { crearBaseVacia, normalizarBase, prepararBase as prepararBaseNucleo, sanitizarParaFirestore } from "./nucleo/base.js";
+import {
+    baseTieneRegistros,
+    crearControlPersistencia,
+    evaluarBackupDiario,
+    marcarBackupDiarioRealizado
+} from "./nucleo/guardias-persistencia.js";
 import { pintarVersionApp } from "./dom/version-ui.js";
 import { cifrarObjeto, descifrarObjeto, esDocumentoCifrado } from "./crypto/nucleo.js";
-import { obtenerClaveActiva, estaSesionDesbloqueada, obtenerSaltActivo, establecerClaveActiva, restaurarSesionCriptoDesdeSessionStorage } from "./crypto/biometria.js";
+import { obtenerClaveActiva, estaSesionDesbloqueada, obtenerSaltActivo, establecerClaveActiva, restaurarSesionCriptoDesdeSessionStorage, bloquearSesionCripto } from "./crypto/biometria.js";
 import { solicitarDesbloqueoCifrado, prepararDocParaNube } from "./crypto/persistencia.js";
-import { generarNombreCopiaRotativa, guardarSnapshotEnHistorial } from "./core/respaldos.js";
+import { generarNombreCopiaRotativa, guardarSnapshotEnHistorial, limpiarHistorialCopias } from "./core/respaldos.js";
 
 /**
  * @deprecated Usar APP_VERSION de js/version.js. Se conserva para no
@@ -50,6 +56,73 @@ provider.setCustomParameters({ prompt: 'select_account' });
 export let db = crearBaseVacia();
 db.compras = [];
 db.comprasCategorias = [];
+
+// Fuente única de verdad para el candado nubeListaParaUid y la guardia anti-borrado
+const controlPersistencia = crearControlPersistencia();
+const uidsConCifradoConfirmado = new Set();
+let secuenciaCargaRemota = 0;
+
+export function estaNubeListaPara(uid) {
+    return controlPersistencia.estaNubeListaPara(uid);
+}
+
+export function puedeGuardarLocalPara(uid, datos = db) {
+    return estaNubeListaPara(uid) && (baseTieneRegistros(datos) || !controlPersistencia.cuentaTeniaDatos(uid));
+}
+
+export function marcarCifradoConfirmado(uid) {
+    if (typeof uid === 'string' && uid.trim() !== '') {
+        uidsConCifradoConfirmado.add(uid.trim());
+    }
+}
+
+export function tieneCifradoActivoLocal(uid) {
+    if (!uid) return false;
+    if (uidsConCifradoConfirmado.has(uid)) return true;
+    if (typeof localStorage === 'undefined') return false;
+    try {
+        return Boolean(
+            localStorage.getItem(`cero_conocimiento_activo_${uid}`) === 'true' ||
+            localStorage.getItem(`cero_conocimiento_salt_${uid}`)
+        );
+    } catch (_) {
+        return false;
+    }
+}
+
+function clonarObjetoSeguro(datos) {
+    if (datos === null || typeof datos !== 'object') return datos;
+    try {
+        if (typeof structuredClone === 'function') {
+            return structuredClone(datos);
+        }
+    } catch (_) {}
+    return JSON.parse(JSON.stringify(datos));
+}
+
+function limpiarClavesComprasLocales(uid = null) {
+    if (typeof localStorage === 'undefined') return;
+    try {
+        if (uid) {
+            localStorage.removeItem(`compras_lineage_${uid}`);
+            localStorage.removeItem(`compras_cats_compras_lineage_${uid}`);
+        }
+        localStorage.removeItem('compras_lineage_anon');
+        localStorage.removeItem('compras_cats_compras_lineage_anon');
+    } catch (_) {}
+}
+
+function reiniciarDbEnMemoria() {
+    Object.keys(db).forEach((k) => delete db[k]);
+    Object.assign(db, crearBaseVacia(), { compras: [], comprasCategorias: [] });
+}
+
+function reemplazarDbEnMemoria(nuevaBase) {
+    Object.keys(db).forEach((k) => delete db[k]);
+    Object.assign(db, nuevaBase);
+    db.compras = Array.isArray(db.compras) ? db.compras : [];
+    db.comprasCategorias = Array.isArray(db.comprasCategorias) ? db.comprasCategorias : [];
+}
 
 /**
  * Normaliza la FORMA de los datos.
@@ -109,9 +182,13 @@ export function generarJsonSnapshot(data) {
 
 export function descargarJson(data = db, nombre = null) {
     try {
+        const uid = auth?.currentUser?.uid || null;
+        const storage = typeof localStorage !== 'undefined' ? localStorage : null;
         const esNombrePorDefecto = !nombre || nombre === 'control_financiero_snapshot.json' || nombre.startsWith('cf_');
-        const nombreFinal = esNombrePorDefecto ? generarNombreCopiaRotativa() : nombre;
-        guardarSnapshotEnHistorial(data);
+        const nombreFinal = esNombrePorDefecto ? generarNombreCopiaRotativa(null, storage, uid) : nombre;
+        if (!tieneCifradoActivoLocal(uid)) {
+            guardarSnapshotEnHistorial(data, storage, uid);
+        }
 
         const txt = generarJsonSnapshot(data);
         const blob = new Blob([txt], { type: 'application/json;charset=utf-8' });
@@ -209,6 +286,11 @@ const persistenceReady = setPersistence(auth, browserLocalPersistence).catch((er
 let authStateReadyResolved = false;
 const authStateReady = persistenceReady.then(() => new Promise((resolve, reject) => {
     onAuthStateChanged(auth, (user) => {
+        const uidListo = controlPersistencia.obtenerNubeListaParaUid();
+        if (!user || (uidListo && user.uid !== uidListo)) {
+            secuenciaCargaRemota++;
+            controlPersistencia.resetear();
+        }
         actualizarPanelLogin(user);
         if (!authStateReadyResolved) {
             authStateReadyResolved = true;
@@ -241,26 +323,25 @@ export async function iniciarSesionGoogle() {
 }
 
 export function cerrarSesion() {
-    const uid = auth.currentUser?.uid;
-    const tieneCifradoActivo = Boolean(
-        uid && typeof localStorage !== 'undefined' && (
-            localStorage.getItem(`cero_conocimiento_activo_${uid}`) === 'true' ||
-            localStorage.getItem(`cero_conocimiento_salt_${uid}`)
-        )
-    );
+    secuenciaCargaRemota++;
+    const uid = auth.currentUser?.uid || null;
+    const tieneCifradoActivo = tieneCifradoActivoLocal(uid);
 
     try {
         if (typeof localStorage !== 'undefined') {
+            // Limpieza defensiva de residuos históricos compartidos
+            localStorage.removeItem('finanzas_db_fallback');
             if (tieneCifradoActivo) {
                 // Prevenir fuga de datos financieros sin cifrar en reposo
-                localStorage.removeItem('finanzas_db_fallback');
                 if (uid) {
                     localStorage.removeItem(`finanzas_db_${uid}`);
                 }
+                limpiarClavesComprasLocales(uid);
+                limpiarHistorialCopias(uid, localStorage);
             } else {
-                const ahora = Date.now();
-                localStorage.setItem('finanzas_db_fallback', JSON.stringify(db));
-                if (uid) {
+                limpiarClavesComprasLocales(null);
+                if (uid && puedeGuardarLocalPara(uid, db)) {
+                    const ahora = Date.now();
                     localStorage.setItem(`finanzas_db_${uid}`, JSON.stringify({ db, timestamp: ahora }));
                 }
             }
@@ -268,6 +349,12 @@ export function cerrarSesion() {
     } catch (e) {
         console.warn('[db] Error gestionando copia local al cerrar sesión:', e);
     }
+
+    // Destruir sesión criptográfica, limpiar memoria en caliente y resetear candados de persistencia
+    bloquearSesionCripto(uid);
+    reiniciarDbEnMemoria();
+    controlPersistencia.resetear();
+
     return signOut(auth).then(() => {
         if (typeof window !== 'undefined' && window.location && typeof window.location.reload === 'function') {
             window.location.reload();
@@ -329,80 +416,140 @@ function reportarFalloPersistencia(operacion, motivo, error) {
  * @param {Object} datos
  * @returns {Promise<void>}
  */
-export async function escribirEnNube(uid, datos) {
-    let tieneCifradoConfigurado = false;
-    if (uid && typeof localStorage !== 'undefined') {
-        try {
-            tieneCifradoConfigurado = Boolean(
-                localStorage.getItem(`cero_conocimiento_salt_${uid}`) ||
-                localStorage.getItem(`cero_conocimiento_activo_${uid}`)
-            );
-        } catch (_) {}
+export async function escribirEnNube(uid, datos, opciones = {}) {
+    // Candado 1 (nubeListaParaUid) y Candado 2 (Guardia anti-borrado)
+    const validacion = controlPersistencia.validarEscrituraRemota(uid, datos);
+    if (!validacion.permitido) {
+        if (validacion.motivo === 'NUBE_NO_LISTA') {
+            console.warn('[Seguridad] Escritura remota abortada: la carga remota aún no finalizó para este usuario.');
+            return { ok: false, bloqueado: true, motivo: 'NUBE_NO_LISTA' };
+        }
+        if (validacion.motivo === 'BLOQUEO_ANTI_BORRADO') {
+            const errBloqueo = new Error('BLOQUEO_ANTI_BORRADO');
+            console.error('[Seguridad] Escritura remota bloqueada: intento de sobrescribir una cuenta con datos usando una base vacía.');
+            busEventos.emitir('db:error', {
+                operacion: 'guardar',
+                motivo: 'anti-borrado',
+                error: errBloqueo,
+                mensaje: validacion.mensaje,
+                recuperable: true
+            });
+            return { ok: false, bloqueado: true, motivo: 'BLOQUEO_ANTI_BORRADO', error: errBloqueo };
+        }
     }
 
+    // Candado 3 (Cero Conocimiento): nunca escribir en texto plano si la sesión está bloqueada
+    const tieneCifradoConfigurado = tieneCifradoActivoLocal(uid);
     const sesionDesbloqueada = estaSesionDesbloqueada() && obtenerClaveActiva();
 
     if (tieneCifradoConfigurado && !sesionDesbloqueada) {
         console.warn('[Seguridad] Escritura remota abortada: la sesión criptográfica está bloqueada para este usuario.');
-        return;
+        return { ok: false, bloqueado: true, motivo: 'SESION_BLOQUEADA' };
     }
 
-    const docParaGuardar = await prepararDocParaNube(datos, uid);
+    // Snapshot inmutable síncrono antes del primer await para evitar carreras con reiniciarDbEnMemoria()
+    const snapshotInmutable = clonarObjetoSeguro(datos);
+
+    const docParaGuardar = await prepararDocParaNube(snapshotInmutable, uid, opciones);
     if (!docParaGuardar) {
-        return;
+        const motivoBloqueo = tieneCifradoActivoLocal(uid) ? 'SESION_BLOQUEADA' : 'SIN_DOCUMENTO';
+        return { ok: false, bloqueado: true, motivo: motivoBloqueo };
     }
-    return setDoc(doc(dbFirestore, 'finanzas_usuarios', uid), docParaGuardar);
+
+    await setDoc(doc(dbFirestore, 'finanzas_usuarios', uid), docParaGuardar);
+    controlPersistencia.registrarDatosConfirmados(uid, snapshotInmutable);
+
+    // Backup diario rotativo de 7 días (dia_0..dia_6), preservando el sobre cifrado
+    try {
+        const storage = typeof localStorage !== 'undefined' ? localStorage : null;
+        const planBackup = evaluarBackupDiario(uid, snapshotInmutable, storage);
+        if (planBackup.debeEscribir) {
+            await setDoc(
+                doc(dbFirestore, 'finanzas_usuarios', uid, 'backups', planBackup.slotId),
+                docParaGuardar
+            );
+            marcarBackupDiarioRealizado(uid, planBackup.fechaStr, storage);
+        }
+    } catch (errBackup) {
+        console.warn('[Backup] No se pudo escribir el backup diario en Firestore (guardado principal intacto):', errBackup);
+    }
+
+    return { ok: true };
 }
 
-export async function cargarBaseDatosRemota(usuario = null) {
+export async function cargarBaseDatosRemota(usuario = null, opciones = {}) {
+    const miSecuencia = ++secuenciaCargaRemota;
+    const forzarDesdeNube = Boolean(opciones?.forzarDesdeNube);
+
     const user = usuario || await esperarUsuario();
+    if (miSecuencia !== secuenciaCargaRemota) {
+        return { user: null, database: null, obsoleta: true };
+    }
     if (!user) {
+        controlPersistencia.resetear();
         actualizarEstadoApp('Sesión no iniciada.');
         return { user: null, database: null };
+    }
+
+    const sigueVigente = () => miSecuencia === secuenciaCargaRemota && auth.currentUser?.uid === user.uid;
+
+    // Mantener candado cerrado hasta confirmar lectura y descifrado exitosos para este uid
+    if (!controlPersistencia.estaNubeListaPara(user.uid)) {
+        controlPersistencia.resetear();
     }
 
     actualizarEstadoApp('Cargando datos de Firestore…');
     busEventos.emitir('db:cargando', { operacion: 'cargar', motivo: 'arranque' });
 
-    // 1. Leer copia local del usuario si existe para comparar versiones o servir de respaldo
+    // 1. Leer copia local EXCLUSIVAMENTE del usuario autenticado (y jamás si tiene Cero Conocimiento activo)
     let localData = null;
     let localTimestamp = 0;
-    try {
-        const rawLocalUser = typeof localStorage !== 'undefined' ? localStorage.getItem(`finanzas_db_${user.uid}`) : null;
-        if (rawLocalUser) {
-            const parsed = JSON.parse(rawLocalUser);
-            if (parsed && typeof parsed === 'object') {
-                if (parsed.db) {
-                    localData = parsed.db;
-                    localTimestamp = Number(parsed.timestamp) || 0;
-                } else {
-                    localData = parsed;
-                    localTimestamp = Number(parsed.timestamp) || 0;
+    if (!tieneCifradoActivoLocal(user.uid)) {
+        try {
+            const rawLocalUser = typeof localStorage !== 'undefined' ? localStorage.getItem(`finanzas_db_${user.uid}`) : null;
+            if (rawLocalUser) {
+                const parsed = JSON.parse(rawLocalUser);
+                if (parsed && typeof parsed === 'object') {
+                    if (parsed.db) {
+                        localData = parsed.db;
+                        localTimestamp = Number(parsed.timestamp) || 0;
+                    } else {
+                        localData = parsed;
+                        localTimestamp = Number(parsed.timestamp) || 0;
+                    }
                 }
             }
+        } catch (e) {
+            console.warn('[db] No se pudo leer la copia local previa:', e);
         }
-        if (!localData && typeof localStorage !== 'undefined') {
-            const rawFallback = localStorage.getItem('finanzas_db_fallback');
-            if (rawFallback) {
-                const parsed = JSON.parse(rawFallback);
-                localData = parsed?.db || parsed;
-                localTimestamp = Number(parsed?.timestamp) || 0;
-            }
-        }
-    } catch (e) {
-        console.warn('[db] No se pudo leer la copia local previa:', e);
     }
 
     const docRef = doc(dbFirestore, 'finanzas_usuarios', user.uid);
     try {
         const snap = await getDoc(docRef);
+        if (!sigueVigente()) {
+            return { user: null, database: null, obsoleta: true };
+        }
+
         if (snap.exists()) {
             const rawData = snap.data();
             let remoteData = rawData;
 
             if (esDocumentoCifrado(rawData)) {
+                marcarCifradoConfirmado(user.uid);
+                localData = null;
+                localTimestamp = 0;
+                try {
+                    if (typeof localStorage !== 'undefined') {
+                        localStorage.removeItem(`finanzas_db_${user.uid}`);
+                    }
+                } catch (_) {}
+
                 if (!estaSesionDesbloqueada()) {
                     await restaurarSesionCriptoDesdeSessionStorage(user?.uid);
+                    if (!sigueVigente()) {
+                        return { user: null, database: null, obsoleta: true };
+                    }
                 }
                 if (estaSesionDesbloqueada() && obtenerClaveActiva()) {
                     remoteData = await descifrarObjeto(rawData, obtenerClaveActiva());
@@ -412,6 +559,10 @@ export async function cargarBaseDatosRemota(usuario = null) {
                         : solicitarDesbloqueoCifrado;
                     remoteData = await solicitar(rawData, user);
                 }
+                if (!sigueVigente()) {
+                    return { user: null, database: null, obsoleta: true };
+                }
+
                 if (rawData.salt && user?.uid && typeof localStorage !== 'undefined') {
                     try {
                         localStorage.setItem(`cero_conocimiento_salt_${user.uid}`, rawData.salt);
@@ -421,76 +572,99 @@ export async function cargarBaseDatosRemota(usuario = null) {
             }
 
             const remoteTimestamp = Number(remoteData?.timestamp || rawData?.timestamp) || 0;
+            const nubeTeniaDatos = baseTieneRegistros(remoteData);
 
-            // Si la versión local es más reciente que la remota (guardado offline o inactividad)
-            if (localData && localTimestamp > 0 && remoteTimestamp > 0 && localTimestamp > remoteTimestamp) {
+            // Si la versión local es más reciente que la remota (guardado offline o inactividad),
+            // solo se promueve si no se pidió forzarDesdeNube, no hay cifrado activo y no pisa una nube con datos usando una copia vacía.
+            if (
+                !forzarDesdeNube &&
+                !tieneCifradoActivoLocal(user.uid) &&
+                localData &&
+                localTimestamp > 0 &&
+                remoteTimestamp > 0 &&
+                localTimestamp > remoteTimestamp &&
+                (!nubeTeniaDatos || baseTieneRegistros(localData))
+            ) {
                 console.info('[db] La versión local es más reciente que la nube. Usando versión local y sincronizando nube.');
                 const { base } = prepararBase(localData);
-                Object.assign(db, base);
-                db.compras = Array.isArray(db.compras) ? db.compras : [];
-                db.comprasCategorias = Array.isArray(db.comprasCategorias) ? db.comprasCategorias : [];
+                reemplazarDbEnMemoria(base);
                 db.timestamp = localTimestamp;
+                controlPersistencia.marcarNubeLista(user.uid, db, { teniaDatos: nubeTeniaDatos });
                 try {
                     await escribirEnNube(user.uid, db);
                 } catch (errSync) {
                     console.warn('[db] Error al re-sincronizar nube con versión local más reciente:', errSync);
+                }
+                if (!sigueVigente()) {
+                    return { user: null, database: null, obsoleta: true };
                 }
             } else {
                 const { base, migracionesAplicadas } = prepararBase(remoteData);
                 if (migracionesAplicadas.length > 0) {
                     console.info(`[Esquema] Migraciones aplicadas: ${migracionesAplicadas.join(', ')}`);
                 }
-                Object.assign(db, base);
-                db.compras = Array.isArray(db.compras) ? db.compras : [];
-                db.comprasCategorias = Array.isArray(db.comprasCategorias) ? db.comprasCategorias : [];
+                reemplazarDbEnMemoria(base);
                 if (remoteTimestamp > 0) db.timestamp = remoteTimestamp;
+                controlPersistencia.marcarNubeLista(user.uid, db, { teniaDatos: nubeTeniaDatos });
             }
 
             try {
-                const ahora = db.timestamp || Date.now();
-                localStorage.setItem('finanzas_db_fallback', JSON.stringify(db));
-                localStorage.setItem(`finanzas_db_${user.uid}`, JSON.stringify({ db, timestamp: ahora }));
+                if (typeof localStorage !== 'undefined' && !tieneCifradoActivoLocal(user.uid)) {
+                    const ahora = db.timestamp || Date.now();
+                    localStorage.setItem(`finanzas_db_${user.uid}`, JSON.stringify({ db, timestamp: ahora }));
+                }
             } catch (e) {
                 console.warn('[db] No se pudo respaldar copia local tras carga de nube:', e);
             }
         } else {
             // Primera apertura de la cuenta: el documento remoto no existe.
-            if (localData) {
+            reiniciarDbEnMemoria();
+            if (localData && !forzarDesdeNube && !tieneCifradoActivoLocal(user.uid)) {
                 try {
                     const { base: baseLocal } = prepararBaseNucleo(localData, db);
-                    Object.assign(db, baseLocal);
-                    db.compras = Array.isArray(db.compras) ? db.compras : [];
-                    db.comprasCategorias = Array.isArray(db.comprasCategorias) ? db.comprasCategorias : [];
-                    console.info('[db] Documento remoto inexistente: se sembró desde la copia local.');
+                    reemplazarDbEnMemoria(baseLocal);
+                    console.info('[db] Documento remoto inexistente: se sembró desde la copia local del usuario.');
                 } catch (e) {
                     console.warn('[db] No se pudo leer la copia local para sembrar:', e);
                 }
             }
-            db.compras = Array.isArray(db.compras) ? db.compras : [];
-            db.comprasCategorias = Array.isArray(db.comprasCategorias) ? db.comprasCategorias : [];
+            db.timestamp = db.timestamp || Date.now();
+            controlPersistencia.marcarNubeLista(user.uid, db);
             await escribirEnNube(user.uid, db);
+            if (!sigueVigente()) {
+                return { user: null, database: null, obsoleta: true };
+            }
             try {
-                const ahora = Date.now();
-                localStorage.setItem('finanzas_db_fallback', JSON.stringify(db));
-                localStorage.setItem(`finanzas_db_${user.uid}`, JSON.stringify({ db, timestamp: ahora }));
+                if (typeof localStorage !== 'undefined' && !tieneCifradoActivoLocal(user.uid)) {
+                    const ahora = db.timestamp || Date.now();
+                    localStorage.setItem(`finanzas_db_${user.uid}`, JSON.stringify({ db, timestamp: ahora }));
+                }
             } catch (_) {}
         }
         actualizarEstadoApp('Aplicación lista');
         busEventos.emitir('db:cargado', { operacion: 'cargar', motivo: 'arranque', destino: 'nube', vacio: !snap.exists() });
         return { user, database: db, vacio: !snap.exists() };
     } catch (error) {
+        controlPersistencia.resetear();
+        if (!sigueVigente()) {
+            return { user: null, database: null, obsoleta: true };
+        }
+        if (error?.message === 'DESBLOQUEO_CANCELADO') {
+            actualizarEstadoApp('Desbloqueo cancelado.');
+            return { user: null, database: null, cancelado: true, error };
+        }
         mostrarDebug('Falló la carga de datos de Firestore', error);
-        actualizarEstadoApp('No se pudieron cargar los datos de la nube. Usando respaldo local.');
-        if (localData) {
+        if (!tieneCifradoActivoLocal(user.uid) && localData) {
+            actualizarEstadoApp('No se pudieron cargar los datos de la nube. Usando respaldo local.');
             try {
                 const { base: baseLocal } = prepararBase(localData);
-                Object.assign(db, baseLocal);
-                db.compras = Array.isArray(db.compras) ? db.compras : [];
-                db.comprasCategorias = Array.isArray(db.comprasCategorias) ? db.comprasCategorias : [];
-                console.info('[db] Respaldo local restaurado tras error de red.');
+                reemplazarDbEnMemoria(baseLocal);
+                console.info('[db] Respaldo local del usuario restaurado tras error de red.');
             } catch (e) {
                 console.warn('[db] Error restaurando copia local tras fallo de red:', e);
             }
+        } else {
+            actualizarEstadoApp('No se pudieron cargar los datos de la nube.');
         }
         reportarFalloPersistencia('cargar', 'arranque', error);
         busEventos.emitir('db:cargado', { operacion: 'cargar', motivo: 'arranque', destino: 'local', error });
@@ -499,14 +673,23 @@ export async function cargarBaseDatosRemota(usuario = null) {
 }
 
 export async function guardarBaseDatosLocal(data, motivo = 'edicion') {
-    db = data;
+    if (!data || typeof data !== 'object') {
+        return { ok: false, destino: 'local', motivo: 'datos-invalidos' };
+    }
+    reemplazarDbEnMemoria(data);
+    db.version = SCHEMA_VERSION;
     const ahora = Date.now();
     db.timestamp = ahora;
     if (!Array.isArray(db.compras)) db.compras = [];
     if (!Array.isArray(db.comprasCategorias)) db.comprasCategorias = [];
     try {
-        localStorage.setItem('finanzas_db_fallback', JSON.stringify(db));
-        if (auth.currentUser?.uid) {
+        const uidActual = auth.currentUser?.uid;
+        if (
+            uidActual &&
+            typeof localStorage !== 'undefined' &&
+            !tieneCifradoActivoLocal(uidActual) &&
+            puedeGuardarLocalPara(uidActual, db)
+        ) {
             localStorage.setItem(`finanzas_db_${auth.currentUser.uid}`, JSON.stringify({ db, timestamp: ahora }));
         }
     } catch (e) {
@@ -516,7 +699,35 @@ export async function guardarBaseDatosLocal(data, motivo = 'edicion') {
 
     if (auth.currentUser) {
         try {
-            await escribirEnNube(auth.currentUser.uid, db);
+            const resNube = await escribirEnNube(auth.currentUser.uid, db);
+            if (resNube && resNube.bloqueado) {
+                if (resNube.motivo === 'NUBE_NO_LISTA') {
+                    if (motivo === 'manual') {
+                        busEventos.emitir('db:error', {
+                            operacion: 'guardar-local',
+                            motivo: 'nube-no-lista',
+                            mensaje: 'Todavía no se completó la carga desde la nube. Esperá un instante o sincronizá antes de guardar.',
+                            recuperable: true
+                        });
+                    }
+                    return { ok: false, destino: 'local', motivo: 'nube-no-lista' };
+                }
+                if (resNube.motivo === 'SESION_BLOQUEADA') {
+                    if (motivo === 'manual') {
+                        busEventos.emitir('db:error', {
+                            operacion: 'guardar-local',
+                            motivo: 'sesion-bloqueada',
+                            mensaje: 'Tu sesión cifrada está bloqueada. Desbloqueala con tu PIN o biometría para guardar en la nube.',
+                            recuperable: true
+                        });
+                    }
+                    return { ok: false, destino: 'local', motivo: 'sesion-bloqueada' };
+                }
+                if (resNube.motivo === 'BLOQUEO_ANTI_BORRADO') {
+                    return { ok: false, destino: 'local', motivo: 'anti-borrado', error: resNube.error };
+                }
+                return { ok: false, destino: 'local', motivo: 'bloqueado' };
+            }
             busEventos.emitir('db:cargado', { operacion: 'guardar-local', motivo, destino: 'nube' });
             return { ok: true, destino: 'nube' };
         } catch (error) {
@@ -529,14 +740,14 @@ export async function guardarBaseDatosLocal(data, motivo = 'edicion') {
 }
 
 /**
- * Guarda la base completa en localStorage y en Firestore.
+ * Guarda la base completa en localStorage (aislado por uid) y en Firestore.
  *
  * El parámetro `motivo` es nuevo y opcional: los llamadores
  * existentes que invocan guardarTodo() siguen funcionando sin
  * cambios y se comportan como 'auto'.
  *
  * @param {string} [motivo]
- * @returns {Promise<{ok:boolean, destino:string, error?:Error}>}
+ * @returns {Promise<{ok:boolean, destino:string, motivo?:string, error?:Error}>}
  */
 export async function guardarTodo(motivo = 'auto') {
     db.version = SCHEMA_VERSION;
@@ -545,8 +756,13 @@ export async function guardarTodo(motivo = 'auto') {
     if (!Array.isArray(db.compras)) db.compras = [];
     if (!Array.isArray(db.comprasCategorias)) db.comprasCategorias = [];
     try {
-        localStorage.setItem('finanzas_db_fallback', JSON.stringify(db));
-        if (auth.currentUser?.uid) {
+        const uidActual = auth.currentUser?.uid;
+        if (
+            uidActual &&
+            typeof localStorage !== 'undefined' &&
+            !tieneCifradoActivoLocal(uidActual) &&
+            puedeGuardarLocalPara(uidActual, db)
+        ) {
             localStorage.setItem(`finanzas_db_${auth.currentUser.uid}`, JSON.stringify({ db, timestamp: ahora }));
         }
     } catch (e) {
@@ -561,7 +777,35 @@ export async function guardarTodo(motivo = 'auto') {
     }
 
     try {
-        await escribirEnNube(auth.currentUser.uid, db);
+        const resNube = await escribirEnNube(auth.currentUser.uid, db);
+        if (resNube && resNube.bloqueado) {
+            if (resNube.motivo === 'NUBE_NO_LISTA') {
+                if (motivo === 'manual') {
+                    busEventos.emitir('db:error', {
+                        operacion: 'guardar',
+                        motivo: 'nube-no-lista',
+                        mensaje: 'Todavía no se completó la carga desde la nube. Esperá un instante o sincronizá antes de guardar.',
+                        recuperable: true
+                    });
+                }
+                return { ok: false, destino: 'local', motivo: 'nube-no-lista' };
+            }
+            if (resNube.motivo === 'SESION_BLOQUEADA') {
+                if (motivo === 'manual') {
+                    busEventos.emitir('db:error', {
+                        operacion: 'guardar',
+                        motivo: 'sesion-bloqueada',
+                        mensaje: 'Tu sesión cifrada está bloqueada. Desbloqueala con tu PIN o biometría para guardar en la nube.',
+                        recuperable: true
+                    });
+                }
+                return { ok: false, destino: 'local', motivo: 'sesion-bloqueada' };
+            }
+            if (resNube.motivo === 'BLOQUEO_ANTI_BORRADO') {
+                return { ok: false, destino: 'local', motivo: 'anti-borrado', error: resNube.error };
+            }
+            return { ok: false, destino: 'local', motivo: 'bloqueado' };
+        }
         console.log('[Guardado] Nube + Local');
         busEventos.emitir('db:cargado', { operacion: 'guardar', motivo, destino: 'nube' });
         return { ok: true, destino: 'nube' };

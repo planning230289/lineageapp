@@ -48,7 +48,10 @@ export const MOTIVOS_SILENCIOSOS = new Set(['auto', 'edicion', 'cierre']);
 export const MENSAJE_FALLA = {
     cargar: 'No se pudieron leer los datos de la nube. Se está mostrando la copia local, que puede estar desactualizada.',
     guardar: 'No se pudo guardar en la nube. Los cambios quedaron sólo en este dispositivo.',
-    'guardar-local': 'No se pudo guardar en la nube. Los cambios quedaron sólo en este dispositivo.'
+    'guardar-local': 'No se pudo guardar en la nube. Los cambios quedaron sólo en este dispositivo.',
+    'anti-borrado': 'Se bloqueó la escritura de una base vacía para proteger tus datos en la nube.',
+    'nube-no-lista': 'Todavía no se completó la carga desde la nube. Esperá un instante o sincronizá antes de guardar.',
+    'sesion-bloqueada': 'Tu sesión cifrada está bloqueada. Desbloqueala con tu PIN o biometría para guardar en la nube.'
 };
 
 const TRAZA = '[Persistencia]';
@@ -89,12 +92,30 @@ export function suscribirAvisosPersistencia(bus, { notificarError, notificarExit
     const bajaError = bus.on('db:error', (detalle) => {
         if (!detalle) return;
 
-        const { operacion, mensaje, error } = detalle;
+        const { operacion, motivo, mensaje, error } = detalle;
 
         // Traza completa para diagnóstico. El texto del aviso
         // deliberadamente NO incluye el código de Firebase: es
         // técnico y hace Noise sin ayudar a decidir qué hacer.
         console.error(`${TRAZA}:${operacion}`, error || mensaje);
+
+        if (motivo === 'anti-borrado') {
+            const textoProteccion = mensaje || MENSAJE_FALLA['anti-borrado'];
+            notificarError(textoProteccion, { clave: 'db-error-anti-borrado' });
+            return;
+        }
+
+        if (motivo === 'nube-no-lista') {
+            const textoNube = mensaje || MENSAJE_FALLA['nube-no-lista'];
+            notificarError(textoNube, { clave: 'db-error-nube-no-lista' });
+            return;
+        }
+
+        if (motivo === 'sesion-bloqueada') {
+            const textoBloqueada = mensaje || MENSAJE_FALLA['sesion-bloqueada'];
+            notificarError(textoBloqueada, { clave: 'db-error-sesion-bloqueada' });
+            return;
+        }
 
         const baseTexto = MENSAJE_FALLA[operacion]
             || `Error de sincronización: ${mensaje || 'desconocido'}`;

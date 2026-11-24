@@ -196,11 +196,12 @@ describe('sobre el index.html real', () => {
         // pasaría sin comprobar nada. Se extrae todo lo que tiene
         // forma de versión y se exige que sea la de APP_VERSION.
         //
-        // El patrón pide un solo dígito en la parte menor para no
-        // confundir un monto con separador de miles ("1.250") con
-        // una versión.
+        // El patrón soporta versiones de 3 partes (incluyendo minor
+        // de 2+ dígitos como "15.10.0") y versiones de 2 partes
+        // siempre que la parte menor no tenga exactamente 3 dígitos,
+        // para no confundir un monto con separador de miles ("1.250").
         const versiones = (texto) =>
-            (texto.match(/\bv?\d+\.\d(?!\d)(?:\.\d+)?\b/g) || [])
+            (texto.match(/\bv?\d+(?:\.\d+\.\d+|\.(?!\d{3}\b)\d+)\b/g) || [])
                 .map((t) => t.replace(/^v/, ''));
 
         const encontradasBody = versiones(doc.body.textContent);

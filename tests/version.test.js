@@ -81,18 +81,16 @@ describe('coherencia entre archivos', () => {
         // cosas como tracking-[0.2em] o ?v=2, que son números pero no
         // versiones) y se busca sobre el texto que la persona lee.
         //
-        // El patrón exige un ÚNICO dígito en la parte menor, por el
-        // lookahead. No es arbitrario: los montos se formatean con
-        // separador de miles ("1.250"), y exigir un dígito solo
-        // separa las dos cosas sin depender de un signo monetario.
-        // APP_VERSION es MAJOR.MINOR de un dígito, y otro test ya lo
-        // valida con /^\d+\.\d+$/.
+        // El patrón soporta versiones de 3 partes (incluyendo minor
+        // de 2+ dígitos como "15.10.0") y versiones de 2 partes
+        // siempre que la parte menor no tenga exactamente 3 dígitos,
+        // para no confundir un monto con separador de miles ("1.250").
         const html = leer('index.html');
         const texto = html
             .replace(/<!--[\s\S]*?-->/g, ' ')
             .replace(/<[^>]+>/g, ' ');
 
-        const numeros = texto.match(/\bv?\d+\.\d(?!\d)(?:\.\d+)?\b/g) || [];
+        const numeros = texto.match(/\bv?\d+(?:\.\d+\.\d+|\.(?!\d{3}\b)\d+)\b/g) || [];
         expect(
             numeros,
             `números con forma de versión escritos a mano en el texto visible: ${numeros.join(', ')}`

@@ -3,7 +3,7 @@
    Integración con DOM, persistencia en db/nube/local y db.gastos
    ========================================================= */
 
-import { db, guardarTodo, auth } from './db.js';
+import { db, guardarTodo, auth, tieneCifradoActivoLocal } from './db.js';
 import { formatARS, obtenerMesActual } from './calculos.js';
 import { generarId } from './utils/id.js';
 import { formatearTextoMoneda } from './utils/mascara-moneda.js';
@@ -30,15 +30,59 @@ let filtroTextoActual = '';
 const acordeonesComprasCerrados = new Set();
 
 /**
- * Obtiene la clave de almacenamiento seguro para compras.
+ * Obtiene el UID del usuario autenticado actual para aislar compras.
+ * @returns {string|null}
  */
-function obtenerStorageKey() {
+function obtenerUidCompras() {
     const uid = auth?.currentUser?.uid || (db && (db.uid || db.user?.uid));
-    return uid ? `compras_lineage_${uid}` : 'compras_lineage_anon';
+    return typeof uid === 'string' && uid.trim() !== '' ? uid.trim() : null;
 }
 
 /**
- * Carga la lista de compras desde db.compras o fallback a localStorage.
+ * Obtiene la clave de almacenamiento seguro para compras (aislada por UID; sin clave anónima).
+ * @returns {string|null}
+ */
+function obtenerStorageKey() {
+    const uid = obtenerUidCompras();
+    return uid ? `compras_lineage_${uid}` : null;
+}
+
+/**
+ * Determina si está permitido leer/escribir compras en localStorage.
+ * En modo Cero Conocimiento o sin usuario autenticado, nunca se persiste en localStorage.
+ * @returns {boolean}
+ */
+function puedeUsarStorageCompras() {
+    const uid = obtenerUidCompras();
+    if (!uid || typeof localStorage === 'undefined') return false;
+    if (tieneCifradoActivoLocal(uid)) return false;
+    return true;
+}
+
+/**
+ * Elimina del localStorage las claves locales de compras del usuario y cualquier clave anónima heredada.
+ * @param {string|null} [uid=null]
+ * @returns {boolean}
+ */
+export function limpiarStorageCompras(uid = null) {
+    if (typeof localStorage === 'undefined') return false;
+    try {
+        const uidEfectivo = (typeof uid === 'string' && uid.trim() !== '') ? uid.trim() : obtenerUidCompras();
+        if (uidEfectivo) {
+            localStorage.removeItem(`compras_lineage_${uidEfectivo}`);
+            localStorage.removeItem(`compras_cats_compras_lineage_${uidEfectivo}`);
+        }
+        localStorage.removeItem('compras_lineage_anon');
+        localStorage.removeItem('compras_cats_compras_lineage_anon');
+        return true;
+    } catch (e) {
+        console.warn('[compras] Error al limpiar storage de compras:', e);
+        return false;
+    }
+}
+
+/**
+ * Carga la lista de compras desde db.compras o fallback a localStorage (solo sin cifrado y con UID).
  * @returns {Array<Object>}
  */
 export function cargarListaCompras() {
@@ -46,27 +90,20 @@ export function cargarListaCompras() {
         return db.compras;
     }
 
-    try {
-        const key = obtenerStorageKey();
-        const guardado = localStorage.getItem(key);
-        if (guardado) {
-            const parseado = JSON.parse(guardado);
-            if (Array.isArray(parseado) && parseado.length > 0) {
-                if (db) db.compras = parseado;
-                return parseado;
+    if (puedeUsarStorageCompras()) {
+        try {
+            const key = obtenerStorageKey();
+            const guardado = key ? localStorage.getItem(key) : null;
+            if (guardado) {
+                const parseado = JSON.parse(guardado);
+                if (Array.isArray(parseado) && parseado.length > 0) {
+                    if (db) db.compras = parseado;
+                    return parseado;
+                }
             }
+        } catch (e) {
+            console.warn('[compras] Error al leer compras desde storage:', e);
         }
-
-        const fallbackGeneral = localStorage.getItem('finanzas_db_fallback');
-        if (fallbackGeneral) {
-            const parsed = JSON.parse(fallbackGeneral);
-            if (Array.isArray(parsed?.compras) && parsed.compras.length > 0) {
-                if (db) db.compras = parsed.compras;
-                return parsed.compras;
-            }
-        }
-    } catch (e) {
-        console.warn('[compras] Error al leer compras desde storage:', e);
     }
 
     if (db && Array.isArray(db.compras)) {
@@ -77,7 +114,7 @@ export function cargarListaCompras() {
 }
 
 /**
- * Persiste la lista de compras en db.compras, localStorage y en la nube vía guardarTodo.
+ * Persiste la lista de compras en db.compras, localStorage (si no hay cifrado) y en la nube vía guardarTodo.
  * @param {Array<Object>} lista
  */
 export function guardarListaCompras(lista) {
@@ -86,11 +123,15 @@ export function guardarListaCompras(lista) {
         db.compras = listaNormalizada;
     }
 
-    try {
-        const key = obtenerStorageKey();
-        localStorage.setItem(key, JSON.stringify(listaNormalizada));
-    } catch (e) {
-        console.error('[compras] Error al persistir compras en localStorage:', e);
+    if (puedeUsarStorageCompras()) {
+        try {
+            const key = obtenerStorageKey();
+            if (key) {
+                localStorage.setItem(key, JSON.stringify(listaNormalizada));
+            }
+        } catch (e) {
+            console.error('[compras] Error al persistir compras en localStorage:', e);
+        }
     }
 
     guardarTodo('edicion').catch(err => {
@@ -99,7 +140,7 @@ export function guardarListaCompras(lista) {
 }
 
 /**
- * Carga las categorías personalizadas desde db.comprasCategorias o localStorage.
+ * Carga las categorías personalizadas desde db.comprasCategorias o localStorage (solo sin cifrado y con UID).
  * @returns {Array<string>}
  */
 export function cargarCategoriasCompras() {
@@ -107,27 +148,21 @@ export function cargarCategoriasCompras() {
         return db.comprasCategorias;
     }
 
-    try {
-        const key = `compras_cats_${obtenerStorageKey()}`;
-        const guardado = localStorage.getItem(key);
-        if (guardado) {
-            const parseado = JSON.parse(guardado);
-            if (Array.isArray(parseado) && parseado.length > 0) {
-                if (db) db.comprasCategorias = parseado;
-                return parseado;
+    if (puedeUsarStorageCompras()) {
+        try {
+            const baseKey = obtenerStorageKey();
+            const key = baseKey ? `compras_cats_${baseKey}` : null;
+            const guardado = key ? localStorage.getItem(key) : null;
+            if (guardado) {
+                const parseado = JSON.parse(guardado);
+                if (Array.isArray(parseado) && parseado.length > 0) {
+                    if (db) db.comprasCategorias = parseado;
+                    return parseado;
+                }
             }
+        } catch (e) {
+            console.warn('[compras] Error al leer categorías desde storage:', e);
         }
-
-        const fallbackGeneral = localStorage.getItem('finanzas_db_fallback');
-        if (fallbackGeneral) {
-            const parsed = JSON.parse(fallbackGeneral);
-            if (Array.isArray(parsed?.comprasCategorias) && parsed.comprasCategorias.length > 0) {
-                if (db) db.comprasCategorias = parsed.comprasCategorias;
-                return parsed.comprasCategorias;
-            }
-        }
-    } catch (e) {
-        console.warn('[compras] Error al leer categorías desde storage:', e);
     }
 
     if (db && Array.isArray(db.comprasCategorias)) {
@@ -138,7 +173,7 @@ export function cargarCategoriasCompras() {
 }
 
 /**
- * Persiste las categorías personalizadas en db.comprasCategorias, localStorage y nube.
+ * Persiste las categorías personalizadas en db.comprasCategorias, localStorage (si no hay cifrado) y nube.
  * @param {Array<string>} categorias
  */
 export function guardarCategoriasCompras(categorias) {
@@ -147,11 +182,16 @@ export function guardarCategoriasCompras(categorias) {
         db.comprasCategorias = normalizadas;
     }
 
-    try {
-        const key = `compras_cats_${obtenerStorageKey()}`;
-        localStorage.setItem(key, JSON.stringify(normalizadas));
-    } catch (e) {
-        console.warn('[compras] Error al guardar categorías en local:', e);
+    if (puedeUsarStorageCompras()) {
+        try {
+            const baseKey = obtenerStorageKey();
+            const key = baseKey ? `compras_cats_${baseKey}` : null;
+            if (key) {
+                localStorage.setItem(key, JSON.stringify(normalizadas));
+            }
+        } catch (e) {
+            console.warn('[compras] Error al guardar categorías en local:', e);
+        }
     }
 
     guardarTodo('edicion').catch(err => {

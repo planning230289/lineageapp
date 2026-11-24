@@ -1,17 +1,174 @@
 rules_version = '2';
+
+// ===============================================================
+// Modelo de Datos Asumido (Assumed Data Model)
+// ===============================================================
+//
+// Este archivo de reglas de seguridad asume las siguientes estructuras
+// para la aplicación Control Financiero (arquitectura single-user
+// aislada por UID de Firebase Authentication):
+//
+// 1. Colección: finanzas_usuarios
+//    Document ID: {uid} (coincide con request.auth.uid)
+//    Operaciones:
+//      - read: solo propietario
+//      - create: solo propietario, payload válido (`docParaGuardar`)
+//      - update: solo propietario, payload válido y protección
+//        anti-downgrade Cero Conocimiento (un documento cifrado no
+//        puede ser sobrescrito con texto plano)
+//      - delete: DENEGADO incondicionalmente desde el cliente (`false`)
+//    Formatos válidos del documento (`docParaGuardar`):
+//      A) Sobre cifrado Cero Conocimiento (AES-GCM 256 bits):
+//         - esCifrado: bool (requerido, == true)
+//         - versionCifrado: int (requerido, >= 1)
+//         - salt: string (requerido, 1..256 caracteres, Base64)
+//         - iv: string (requerido, 1..128 caracteres, Base64)
+//         - datos: string (requerido, 1..1000000 caracteres, Base64)
+//         - timestamp: number (requerido, > 0, Unix ms)
+//      B) Documento estándar sanitizado (usuarios sin cifrado, retrocompatible):
+//         - Mapa no vacío (1..50 claves de nivel superior)
+//         - esCifrado: bool | null (opcional, si existe y no es null debe ser false)
+//         - version: number (opcional, >= 0)
+//         - dolar: number | null (opcional, >= 0 si es número)
+//         - mesActivo: string | null (opcional, <= 32 caracteres)
+//         - timestamp: number | null (opcional, >= 0 si es número, Unix ms)
+//         - ingresos: map (opcional, <= 300 claves)
+//         - gastos: map (opcional, <= 300 claves)
+//         - deseos: list (opcional, <= 500 elementos)
+//         - pasivos: list (opcional, <= 500 elementos)
+//         - compras: list (opcional, <= 2000 elementos)
+//         - comprasCategorias: list (opcional, <= 200 elementos)
+//         - ahorrosAcumuladosManuales: map | null (opcional, <= 300 claves si es mapa)
+//         - uid: string (opcional, si existe debe coincidir con request.auth.uid)
+//
+// 2. Subcolección: finanzas_usuarios/{uid}/backups
+//    Document ID: {backupId} (7 slots rotativos semanales: dia_0 .. dia_6)
+//    Operaciones:
+//      - read: solo propietario (soporta get por slot y list de los 7 slots)
+//      - create: solo propietario, backupId en ^dia_[0-6]$,
+//        y payload válido (mismo `docParaGuardar` que el documento principal)
+//      - update: solo propietario, backupId en ^dia_[0-6]$,
+//        payload válido y protección anti-downgrade Cero Conocimiento
+//      - delete: DENEGADO incondicionalmente desde el cliente (`false`)
+//
+// ===============================================================
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Cada usuario sólo puede leer y escribir su propio documento
-    // de finanzas. La regla anterior (plantilla de prueba de
-    // Firebase) dejaba la base abierta a cualquiera hasta una
-    // fecha de vencimiento, y además tenía un error de sintaxis
-    // (rules_version='2' sin espacios ni punto y coma) que
-    // impedía desplegarla: si nunca se publicaron reglas válidas,
-    // Firestore usa las reglas por defecto, que rechazan todo
-    // write y hacen que guardar en la nube falle siempre.
-    match /finanzas_usuarios/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+    // ===============================================================
+    // Funciones Auxiliares (Helper Functions)
+    // ===============================================================
+
+    // Verifica que exista una sesión autenticada en Firebase Auth.
+    function isAuthenticated() {
+      return request.auth != null;
     }
+
+    // Verifica que el usuario autenticado sea el propietario del recurso.
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    // Verifica que el campo `uid`, si está presente en el documento,
+    // coincida con el usuario autenticado (evita suplantación de identidad).
+    function uidUnchanged(data) {
+      return !('uid' in data) || data.uid == request.auth.uid;
+    }
+
+    // Verifica que el identificador del respaldo corresponda estrictamente
+    // a uno de los 7 slots rotativos semanales (domingo=0 .. sábado=6).
+    function esSlotBackupValido(backupId) {
+      return backupId.matches('^dia_[0-6]$');
+    }
+
+    // ===============================================================
+    // Validadores de Dominio (Domain Validators)
+    // Se invocan obligatoriamente en `create` y `update` para evitar
+    // evasión de validación en actualizaciones.
+    // ===============================================================
+
+    // Valida el sobre cifrado de Cero Conocimiento (esquema estricto).
+    function esSobreCifradoValido(data) {
+      return data.keys().hasAll(['esCifrado', 'versionCifrado', 'salt', 'iv', 'datos', 'timestamp']) &&
+             data.keys().hasOnly(['esCifrado', 'versionCifrado', 'salt', 'iv', 'datos', 'timestamp']) &&
+             data.esCifrado is bool && data.esCifrado == true &&
+             data.versionCifrado is int && data.versionCifrado >= 1 &&
+             data.salt is string && data.salt.size() > 0 && data.salt.size() <= 256 &&
+             data.iv is string && data.iv.size() > 0 && data.iv.size() <= 128 &&
+             data.datos is string && data.datos.size() > 0 && data.datos.size() <= 1000000 &&
+             data.timestamp is number && data.timestamp > 0;
+    }
+
+    // Valida el documento estándar sanitizado para usuarios sin cifrado,
+    // preservando retrocompatibilidad con respaldos heredados y acotando
+    // tamaños de mapas y listas contra agotamiento de recursos.
+    function esDocumentoEstandarValido(data) {
+      return data.keys().size() > 0 &&
+             data.keys().size() <= 50 &&
+             uidUnchanged(data) &&
+             (!('esCifrado' in data) || data.esCifrado == null || (data.esCifrado is bool && data.esCifrado == false)) &&
+             (!('version' in data) || (data.version is number && data.version >= 0)) &&
+             (!('dolar' in data) || data.dolar == null || (data.dolar is number && data.dolar >= 0)) &&
+             (!('mesActivo' in data) || data.mesActivo == null || (data.mesActivo is string && data.mesActivo.size() <= 32)) &&
+             (!('timestamp' in data) || data.timestamp == null || (data.timestamp is number && data.timestamp >= 0)) &&
+             (!('ingresos' in data) || (data.ingresos is map && data.ingresos.size() <= 300)) &&
+             (!('gastos' in data) || (data.gastos is map && data.gastos.size() <= 300)) &&
+             (!('deseos' in data) || (data.deseos is list && data.deseos.size() <= 500)) &&
+             (!('pasivos' in data) || (data.pasivos is list && data.pasivos.size() <= 500)) &&
+             (!('compras' in data) || (data.compras is list && data.compras.size() <= 2000)) &&
+             (!('comprasCategorias' in data) || (data.comprasCategorias is list && data.comprasCategorias.size() <= 200)) &&
+             (!('ahorrosAcumuladosManuales' in data) || data.ahorrosAcumuladosManuales == null || (data.ahorrosAcumuladosManuales is map && data.ahorrosAcumuladosManuales.size() <= 300));
+    }
+
+    // Validador unificado del payload `docParaGuardar` (cifrado o estándar).
+    function esDocumentoFinanzasValido(data) {
+      return data.keys().size() > 0 &&
+             (
+               ('esCifrado' in data && data.esCifrado == true)
+                 ? esSobreCifradoValido(data)
+                 : esDocumentoEstandarValido(data)
+             );
+    }
+
+    // ===============================================================
+    // Reglas de Colecciones
+    // ===============================================================
+
+    // Colección principal: cada usuario solo puede leer y escribir su
+    // propio documento financiero. Se valida el esquema en create y update,
+    // se bloquea el downgrade de Cero Conocimiento a texto plano en update
+    // y se prohíbe el borrado desde el cliente por mínimo privilegio.
+    match /finanzas_usuarios/{uid} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) &&
+                       esDocumentoFinanzasValido(request.resource.data);
+      allow update: if isOwner(uid) &&
+                       esDocumentoFinanzasValido(request.resource.data) &&
+                       (!('esCifrado' in resource.data && resource.data.esCifrado == true) ||
+                        esSobreCifradoValido(request.resource.data));
+      allow delete: if false;
+    }
+
+    // Subcolección de respaldos rotativos semanales en la nube:
+    // 7 slots fijos (dia_0 a dia_6) con el mismo payload `docParaGuardar`.
+    // Se impide el downgrade de un slot cifrado a texto plano en update y
+    // el borrado desde el cliente queda bloqueado incondicionalmente para
+    // impedir que un error de la app elimine copias de recuperación.
+    match /finanzas_usuarios/{uid}/backups/{backupId} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) &&
+                       esSlotBackupValido(backupId) &&
+                       esDocumentoFinanzasValido(request.resource.data);
+      allow update: if isOwner(uid) &&
+                       esSlotBackupValido(backupId) &&
+                       esDocumentoFinanzasValido(request.resource.data) &&
+                       (!('esCifrado' in resource.data && resource.data.esCifrado == true) ||
+                        esSobreCifradoValido(request.resource.data));
+      allow delete: if false;
+    }
+
+    // Denegación por defecto para cualquier otra ruta no declarada.
     match /{document=**} {
       allow read, write: if false;
     }
