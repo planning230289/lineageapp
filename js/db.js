@@ -11,7 +11,7 @@ import {
     onAuthStateChanged,
     signOut
 } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+import { getFirestore, doc, getDoc, getDocFromServer, setDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 import { busEventos } from "./core/eventos.js";
 import { APP_VERSION, SCHEMA_VERSION } from "./version.js";
 import { crearBaseVacia, normalizarBase, prepararBase as prepararBaseNucleo, sanitizarParaFirestore } from "./nucleo/base.js";
@@ -21,6 +21,11 @@ import {
     evaluarBackupDiario,
     marcarBackupDiarioRealizado
 } from "./nucleo/guardias-persistencia.js";
+import {
+    entornoEstaBloqueado,
+    obtenerEstadoEntorno,
+    verificarConectividadFirebase
+} from "./nucleo/guardias-entorno.js";
 import { pintarVersionApp } from "./dom/version-ui.js";
 import { cifrarObjeto, descifrarObjeto, esDocumentoCifrado } from "./crypto/nucleo.js";
 import { obtenerClaveActiva, estaSesionDesbloqueada, obtenerSaltActivo, establecerClaveActiva, restaurarSesionCriptoDesdeSessionStorage, bloquearSesionCripto } from "./crypto/biometria.js";
@@ -416,7 +421,24 @@ function reportarFalloPersistencia(operacion, motivo, error) {
  * @param {Object} datos
  * @returns {Promise<void>}
  */
+export async function verificarConexionFirebase(timeoutMs = 4500) {
+    return verificarConectividadFirebase({
+        auth,
+        dbFirestore,
+        doc,
+        getDocFromServer,
+        timeoutMs
+    });
+}
+
 export async function escribirEnNube(uid, datos, opciones = {}) {
+    if (entornoEstaBloqueado()) {
+        const estadoEntorno = obtenerEstadoEntorno();
+        const motivoEntorno = estadoEntorno.motivo || 'SIN_INTERNET';
+        console.warn('[Seguridad] Escritura remota abortada: entorno bloqueado ->', motivoEntorno);
+        return { ok: false, bloqueado: true, motivo: motivoEntorno };
+    }
+
     // Candado 1 (nubeListaParaUid) y Candado 2 (Guardia anti-borrado)
     const validacion = controlPersistencia.validarEscrituraRemota(uid, datos);
     if (!validacion.permitido) {
@@ -750,6 +772,22 @@ export async function guardarBaseDatosLocal(data, motivo = 'edicion') {
  * @returns {Promise<{ok:boolean, destino:string, motivo?:string, error?:Error}>}
  */
 export async function guardarTodo(motivo = 'auto') {
+    if (entornoEstaBloqueado()) {
+        const estadoEntorno = obtenerEstadoEntorno();
+        const motivoBloqueo = estadoEntorno.motivo || 'SIN_INTERNET';
+        if (motivo === 'manual') {
+            busEventos.emitir('db:error', {
+                operacion: 'guardar',
+                motivo: motivoBloqueo === 'BATERIA_BAJA' ? 'bateria-baja' : 'sin-conexion',
+                mensaje: motivoBloqueo === 'BATERIA_BAJA'
+                    ? 'Batería baja (< 15%): conectá el cargador para guardar de forma segura.'
+                    : 'Sin conexión a internet o Firebase. Reintentá la conexión antes de guardar.',
+                recuperable: true
+            });
+        }
+        return { ok: false, bloqueado: true, motivo: motivoBloqueo };
+    }
+
     db.version = SCHEMA_VERSION;
     const ahora = Date.now();
     db.timestamp = ahora;

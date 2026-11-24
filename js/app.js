@@ -14,8 +14,10 @@ import {
     estaNubeListaPara,
     puedeGuardarLocalPara,
     marcarCifradoConfirmado,
-    tieneCifradoActivoLocal
+    tieneCifradoActivoLocal,
+    verificarConexionFirebase
 } from './db.js';
+import { crearMonitorEntorno } from './nucleo/guardias-entorno.js';
 import { calcularNetoMes, calcularGastosMes, calcularPasivoPorKeyword, formatARS, obtenerMesActual, esPagado, normalizarCategoria, normalizarTexto, aNumero, mesDesplazado, slug, parsearCuota, formatearCuota, valorCalculadoIngreso } from './calculos.js';
 import { renderizarDeseosYProyeccion } from './deseos.js';
 import { mostrarNotificacion, notificarExito, notificarAdvertencia, notificarError, notificarInfo, manejarError } from './notificaciones.js';
@@ -3916,12 +3918,135 @@ console.log('[Script] Funciones expuestas a window correctamente. forzarSincroni
    7. CICLO DE VIDA E INICIALIZACIÓN DE LA APP
    ========================================================= */
 let inicializandoApp = false;
+let appInicializada = false;
+let monitorEntorno = null;
+let botonReintentoConectado = false;
+
+function actualizarUIBloqueoEntorno(estado) {
+    if (typeof document === 'undefined') return;
+    const modal = document.getElementById('modal-bloqueo-entorno');
+    if (!modal) return;
+
+    if (!estado || !estado.bloqueado) {
+        modal.classList.add('hidden');
+        return;
+    }
+
+    const iconoWrap = document.getElementById('bloqueo-entorno-icono-wrap');
+    const icono = document.getElementById('bloqueo-entorno-icono');
+    const titulo = document.getElementById('bloqueo-entorno-titulo');
+    const mensaje = document.getElementById('bloqueo-entorno-mensaje');
+    const btnTexto = document.getElementById('btn-reintentar-entorno-texto');
+
+    if (estado.motivo === 'BATERIA_BAJA') {
+        const pct = typeof estado.porcentajeBateria === 'number' ? estado.porcentajeBateria : 0;
+        if (iconoWrap) {
+            iconoWrap.className = 'mx-auto w-16 h-16 rounded-2xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-600';
+        }
+        if (icono) icono.className = 'fa-solid fa-battery-quarter text-2xl';
+        if (titulo) titulo.textContent = `Batería baja (${pct}%)`;
+        if (mensaje) {
+            mensaje.textContent = 'Conectá el cargador para seguir usando tus finanzas de forma segura y evitar cortes durante el guardado.';
+        }
+        if (btnTexto) btnTexto.textContent = 'Volver a comprobar';
+    } else {
+        if (iconoWrap) {
+            iconoWrap.className = 'mx-auto w-16 h-16 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600';
+        }
+        if (icono) icono.className = 'fa-solid fa-wifi text-2xl';
+        if (titulo) titulo.textContent = 'Sin conexión a internet o Firebase';
+        if (mensaje) {
+            mensaje.textContent = 'Para proteger tus datos financieros y evitar errores de sincronización, la app requiere conexión activa.';
+        }
+        if (btnTexto) btnTexto.textContent = 'Reintentar conexión';
+    }
+
+    modal.classList.remove('hidden');
+}
+
+function pausarCiclosPorEntorno() {
+    try { detenerAutoguardado(); } catch (_) {}
+    detenerInactividad();
+}
+
+function reanudarTrasDesbloqueoEntorno() {
+    if (!appInicializada && !inicializandoApp) {
+        initApp();
+        return;
+    }
+    if (appInicializada && auth.currentUser) {
+        try {
+            iniciarAutoguardado(async () => {
+                await guardarYRenderizar('auto');
+            });
+        } catch (e) {
+            console.warn('[app] iniciarAutoguardado (reanudación):', e);
+        }
+        armarInactividad();
+    }
+}
+
+function conectarBotonReintentoEntorno() {
+    if (botonReintentoConectado || typeof document === 'undefined') return;
+    const btn = document.getElementById('btn-reintentar-entorno');
+    if (!btn) return;
+    botonReintentoConectado = true;
+
+    btn.addEventListener('click', async () => {
+        if (!monitorEntorno) return;
+        const iconoBtn = document.getElementById('btn-reintentar-entorno-icono');
+        const textoBtn = document.getElementById('btn-reintentar-entorno-texto');
+        btn.disabled = true;
+        if (iconoBtn) iconoBtn.className = 'fa-solid fa-spinner fa-spin';
+        if (textoBtn) textoBtn.textContent = 'Comprobando…';
+
+        try {
+            const estado = await monitorEntorno.reintentar();
+            actualizarUIBloqueoEntorno(estado);
+        } finally {
+            btn.disabled = false;
+            if (iconoBtn) iconoBtn.className = 'fa-solid fa-rotate-right';
+            const estadoActual = monitorEntorno.obtenerEstado();
+            if (estadoActual.bloqueado) {
+                actualizarUIBloqueoEntorno(estadoActual);
+            } else if (textoBtn) {
+                textoBtn.textContent = 'Reintentar conexión';
+            }
+        }
+    });
+}
+
+async function asegurarMonitorEntorno() {
+    conectarBotonReintentoEntorno();
+    if (!monitorEntorno) {
+        monitorEntorno = crearMonitorEntorno({
+            verificarFirebase: () => verificarConexionFirebase(),
+            onCambio: (estado) => {
+                actualizarUIBloqueoEntorno(estado);
+                if (estado.bloqueado) {
+                    pausarCiclosPorEntorno();
+                } else {
+                    reanudarTrasDesbloqueoEntorno();
+                }
+            }
+        });
+        return monitorEntorno.iniciar();
+    }
+    return monitorEntorno.obtenerEstado();
+}
 
 // 7.A. Función principal de inicio
 export async function initApp() {
     if (inicializandoApp) return;
     inicializandoApp = true;
     try {
+        const estadoEntorno = await asegurarMonitorEntorno();
+        if (estadoEntorno?.bloqueado) {
+            actualizarUIBloqueoEntorno(estadoEntorno);
+            pausarCiclosPorEntorno();
+            return;
+        }
+        actualizarUIBloqueoEntorno(estadoEntorno);
         // Inicializar preferencia de modo vista (celular / escritorio)
         try {
             const modoGuardado = typeof localStorage !== 'undefined' ? (localStorage.getItem('lineage_vista_modo') || 'escritorio') : 'escritorio';
@@ -3953,6 +4078,7 @@ export async function initApp() {
             try { detenerAutoguardado(); } catch (_) {}
             detenerInactividad();
             if (estado) estado.textContent = resultado?.cancelado ? 'Desbloqueo cancelado' : 'Sin sesión activa';
+            appInicializada = true;
             return;
         }
 
@@ -4018,6 +4144,7 @@ export async function initApp() {
         }
 
         armarInactividad();
+        appInicializada = true;
     } catch (error) {
         console.error('No se pudo inicializar la aplicación:', error);
         const estado = document.getElementById('debug-app-status');

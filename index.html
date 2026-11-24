@@ -1237,6 +1237,27 @@
         </div>
     </nav>
 
+    <!-- 4.A2. Overlay de Bloqueo por Entorno (Sin Internet / Firebase o Batería Baja) -->
+    <div id="modal-bloqueo-entorno" class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/85 backdrop-blur-md hidden p-4" role="alertdialog" aria-modal="true" aria-labelledby="bloqueo-entorno-titulo" aria-describedby="bloqueo-entorno-mensaje">
+        <div class="bg-white rounded-2xl p-6 md:p-8 shadow-2xl border border-gray-100 w-full max-w-md text-center space-y-5">
+            <div id="bloqueo-entorno-icono-wrap" class="mx-auto w-16 h-16 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600">
+                <i id="bloqueo-entorno-icono" class="fa-solid fa-wifi text-2xl"></i>
+            </div>
+            <div class="space-y-2">
+                <h2 id="bloqueo-entorno-titulo" class="text-lg md:text-xl font-bold text-gray-900">
+                    Sin conexión a internet o Firebase
+                </h2>
+                <p id="bloqueo-entorno-mensaje" class="text-xs md:text-sm text-gray-600 leading-relaxed">
+                    Para proteger tus datos financieros y evitar errores de sincronización, la app requiere conexión activa.
+                </p>
+            </div>
+            <button id="btn-reintentar-entorno" type="button" class="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold rounded-xl text-sm flex items-center justify-center gap-2 transition shadow-md">
+                <i id="btn-reintentar-entorno-icono" class="fa-solid fa-rotate-right"></i>
+                <span id="btn-reintentar-entorno-texto">Reintentar conexión</span>
+            </button>
+        </div>
+    </div>
+
     <!-- 4.B. Carga de Módulo Principal y Handlers Globales de Error -->
     <script type="module" src="./js/app.js"></script>
 
