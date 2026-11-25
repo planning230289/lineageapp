@@ -38,13 +38,46 @@ let _bloqueadoHasta = 0;
    ========================================================= */
 
 /**
+ * Detecta si el dispositivo actual es un teléfono móvil.
+ * Retorna false en PC (Windows, macOS, Linux) y tablets (iPad, iPadOS, Android Tablet).
+ *
+ * @returns {boolean}
+ */
+export function esTelefonoMovil() {
+    if (typeof navigator === 'undefined') return false;
+
+    // 1. Señal primaria: User-Agent Client Hints (Chromium)
+    // En Chromium, navigator.userAgentData.mobile es true solo para teléfonos y false para PC/tablets.
+    if (navigator.userAgentData && typeof navigator.userAgentData.mobile === 'boolean') {
+        return navigator.userAgentData.mobile;
+    }
+
+    // 2. Fallback: User-Agent y capacidades táctiles (Safari iOS / Firefox / navegadores sin userAgentData)
+    const ua = typeof navigator.userAgent === 'string' ? navigator.userAgent : '';
+    if (!ua) return false;
+
+    // Excluir explícitamente iPad (incluyendo iPadOS 13+ que reporta Macintosh con maxTouchPoints > 1)
+    const esIpad = /iPad/i.test(ua) || (/Macintosh/i.test(ua) && typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 1);
+    if (esIpad) return false;
+
+    // Excluir explícitamente tablets Android (Android sin token Mobile)
+    const esAndroid = /Android/i.test(ua);
+    if (esAndroid && !/Mobile/i.test(ua)) return false;
+
+    // Teléfonos móviles conocidos o token genérico Mobi
+    return /iPhone|iPod|Windows Phone|webOS|BlackBerry|IEMobile|Opera Mini|Mobi/i.test(ua) || (esAndroid && /Mobile/i.test(ua));
+}
+
+/**
  * Comprueba si el dispositivo y navegador actual soportan autenticadores
- * de plataforma biométricos (huella dactilar, Face ID, Windows Hello, etc.).
+ * de plataforma biométricos (huella dactilar, Face ID) en teléfonos móviles.
+ * En PC y tablets retorna false para ir directo al PIN.
  *
  * @returns {Promise<boolean>}
  */
 export async function esBiometriaDisponible() {
     if (typeof window === 'undefined') return false;
+    if (!esTelefonoMovil()) return false;
     if (!window.PublicKeyCredential) return false;
     if (typeof window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable !== 'function') {
         return false;

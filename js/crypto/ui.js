@@ -9,6 +9,7 @@ import {
 } from './nucleo.js';
 
 import {
+    esTelefonoMovil,
     esBiometriaDisponible,
     registrarBiometria,
     autenticarConBiometria,
@@ -249,7 +250,8 @@ export function abrirModalDesbloquearCifrado(opciones = {}) {
     }
 
     // Comprobar si el usuario tiene biometría previamente registrada en este dispositivo
-    const tieneBio = Boolean(opciones.usuarioId && tieneBiometriaRegistrada(opciones.usuarioId));
+    // (habilitada exclusivamente en teléfonos móviles; en PC y tablets va directo al PIN)
+    const tieneBio = Boolean(esTelefonoMovil() && opciones.usuarioId && tieneBiometriaRegistrada(opciones.usuarioId));
 
     const aplicarVisibilidadBio = (mostrar) => {
         if (contenedorBio) {

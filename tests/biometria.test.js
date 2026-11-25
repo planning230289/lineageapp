@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
+    esTelefonoMovil,
     esBiometriaDisponible,
     registrarBiometria,
     autenticarConBiometria,
@@ -314,18 +315,90 @@ describe('Módulo de Biometría y Sesión Criptográfica (Fase 2)', () => {
         });
     });
 
-    describe('Detección y Flujo WebAuthn', () => {
+    describe('Detección de Teléfono Móvil (esTelefonoMovil) y Flujo WebAuthn', () => {
+        it('debe detectar teléfonos móviles por userAgentData.mobile o userAgent', () => {
+            const originalNav = globalThis.navigator;
+            try {
+                // Chromium teléfono móvil
+                globalThis.navigator = { userAgentData: { mobile: true }, userAgent: '' };
+                expect(esTelefonoMovil()).toBe(true);
+
+                // iPhone (Safari iOS sin userAgentData)
+                globalThis.navigator = {
+                    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+                    maxTouchPoints: 5
+                };
+                expect(esTelefonoMovil()).toBe(true);
+
+                // Android teléfono (contiene Android y Mobile)
+                globalThis.navigator = {
+                    userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Mobile Safari/537.36',
+                    maxTouchPoints: 5
+                };
+                expect(esTelefonoMovil()).toBe(true);
+            } finally {
+                globalThis.navigator = originalNav;
+            }
+        });
+
+        it('debe retornar false en PC (Windows / Mac) y Tablets (iPad / iPadOS / Android Tablet)', () => {
+            const originalNav = globalThis.navigator;
+            try {
+                // PC Windows con Chromium userAgentData.mobile = false
+                globalThis.navigator = {
+                    userAgentData: { mobile: false },
+                    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                };
+                expect(esTelefonoMovil()).toBe(false);
+
+                // PC Mac sin userAgentData
+                globalThis.navigator = {
+                    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                    maxTouchPoints: 0
+                };
+                expect(esTelefonoMovil()).toBe(false);
+
+                // iPad clásico
+                globalThis.navigator = {
+                    userAgent: 'Mozilla/5.0 (iPad; CPU OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
+                    maxTouchPoints: 5
+                };
+                expect(esTelefonoMovil()).toBe(false);
+
+                // iPadOS 13+ (reporta Macintosh con maxTouchPoints > 1)
+                globalThis.navigator = {
+                    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15',
+                    maxTouchPoints: 5
+                };
+                expect(esTelefonoMovil()).toBe(false);
+
+                // Tablet Android (contiene Android pero NO Mobile)
+                globalThis.navigator = {
+                    userAgent: 'Mozilla/5.0 (Linux; Android 13; SM-X700) AppleWebKit/537.36 Safari/537.36',
+                    maxTouchPoints: 5
+                };
+                expect(esTelefonoMovil()).toBe(false);
+            } finally {
+                globalThis.navigator = originalNav;
+            }
+        });
+
         it('debe retornar false si no existe PublicKeyCredential en el entorno', async () => {
             const disponible = await esBiometriaDisponible();
             expect(typeof disponible).toBe('boolean');
         });
 
-        it('debe detectar autenticador de plataforma cuando PublicKeyCredential está disponible', async () => {
+        it('debe detectar autenticador de plataforma cuando es teléfono móvil y PublicKeyCredential está disponible', async () => {
             const originalPKC = globalThis.window?.PublicKeyCredential;
+            const originalNav = globalThis.navigator;
             try {
                 if (!globalThis.window) {
                     globalThis.window = {};
                 }
+                globalThis.navigator = {
+                    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)',
+                    maxTouchPoints: 5
+                };
                 globalThis.window.PublicKeyCredential = {
                     isUserVerifyingPlatformAuthenticatorAvailable: vi.fn().mockResolvedValue(true)
                 };
@@ -334,6 +407,40 @@ describe('Módulo de Biometría y Sesión Criptográfica (Fase 2)', () => {
                 expect(res).toBe(true);
                 expect(globalThis.window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable).toHaveBeenCalled();
             } finally {
+                globalThis.navigator = originalNav;
+                if (originalPKC !== undefined) {
+                    globalThis.window.PublicKeyCredential = originalPKC;
+                }
+            }
+        });
+
+        it('debe retornar false en esBiometriaDisponible() para PC y tablets sin consultar PublicKeyCredential', async () => {
+            const originalPKC = globalThis.window?.PublicKeyCredential;
+            const originalNav = globalThis.navigator;
+            try {
+                if (!globalThis.window) {
+                    globalThis.window = {};
+                }
+                const spyPlatform = vi.fn().mockResolvedValue(true);
+                globalThis.window.PublicKeyCredential = {
+                    isUserVerifyingPlatformAuthenticatorAvailable: spyPlatform
+                };
+
+                // PC Windows
+                globalThis.navigator = { userAgentData: { mobile: false }, userAgent: 'Windows NT 10.0' };
+                expect(await esBiometriaDisponible()).toBe(false);
+
+                // iPadOS
+                globalThis.navigator = { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', maxTouchPoints: 5 };
+                expect(await esBiometriaDisponible()).toBe(false);
+
+                // Tablet Android
+                globalThis.navigator = { userAgent: 'Mozilla/5.0 (Linux; Android 13; SM-T870) Safari/537.36' };
+                expect(await esBiometriaDisponible()).toBe(false);
+
+                expect(spyPlatform).not.toHaveBeenCalled();
+            } finally {
+                globalThis.navigator = originalNav;
                 if (originalPKC !== undefined) {
                     globalThis.window.PublicKeyCredential = originalPKC;
                 }

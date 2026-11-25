@@ -199,14 +199,64 @@ describe('Interfaz y Modales Cero Conocimiento (Fase 2 - UI)', () => {
     });
 
     describe('Modal de Desbloqueo (#modal-desbloquear-cifrado) y Fuerza Bruta', () => {
-        it('debe mostrar el botón de biometría si el usuario la tiene registrada', () => {
-            guardarCredencialBiometrica('usr_bio', { credentialId: 'c1' });
+        const UA_IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15';
 
-            abrirModalDesbloquearCifrado({ usuarioId: 'usr_bio', salt: 'testSalt' });
-            const contenedorBio = document.getElementById('contenedor-btn-biometria');
-            expect(contenedorBio.classList.contains('hidden')).toBe(false);
+        it('debe mostrar el botón de biometría en teléfono móvil si el usuario la tiene registrada', () => {
+            const originalNav = globalThis.navigator;
+            try {
+                globalThis.navigator = { userAgent: UA_IPHONE, maxTouchPoints: 5 };
+                guardarCredencialBiometrica('usr_bio', { credentialId: 'c1' });
 
-            cerrarModalDesbloquearCifrado();
+                abrirModalDesbloquearCifrado({ usuarioId: 'usr_bio', salt: 'testSalt' });
+                const contenedorBio = document.getElementById('contenedor-btn-biometria');
+                expect(contenedorBio.classList.contains('hidden')).toBe(false);
+
+                cerrarModalDesbloquearCifrado();
+            } finally {
+                globalThis.navigator = originalNav;
+            }
+        });
+
+        it('en PC o tablet debe ir directo al PIN y ocultar biometría incluso si hay credencial registrada', () => {
+            const originalNav = globalThis.navigator;
+            try {
+                // Simular PC Windows con credencial biométrica previa en localStorage
+                globalThis.navigator = {
+                    userAgentData: { mobile: false },
+                    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                    credentials: {
+                        get: vi.fn()
+                    }
+                };
+                guardarCredencialBiometrica('usr_pc_bio', { credentialId: 'c_pc' });
+
+                abrirModalDesbloquearCifrado({ usuarioId: 'usr_pc_bio', salt: 'testSalt' });
+                const contenedorBio = document.getElementById('contenedor-btn-biometria');
+                const seccionPin = document.getElementById('seccion-desbloquear-pin');
+
+                expect(contenedorBio.classList.contains('hidden')).toBe(true);
+                expect(seccionPin.classList.contains('hidden')).toBe(false);
+                expect(globalThis.navigator.credentials.get).not.toHaveBeenCalled();
+
+                cerrarModalDesbloquearCifrado();
+
+                // Simular iPadOS (Macintosh + touch) con credencial previa
+                globalThis.navigator = {
+                    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15',
+                    maxTouchPoints: 5,
+                    credentials: {
+                        get: vi.fn()
+                    }
+                };
+                abrirModalDesbloquearCifrado({ usuarioId: 'usr_pc_bio', salt: 'testSalt' });
+                expect(contenedorBio.classList.contains('hidden')).toBe(true);
+                expect(seccionPin.classList.contains('hidden')).toBe(false);
+                expect(globalThis.navigator.credentials.get).not.toHaveBeenCalled();
+
+                cerrarModalDesbloquearCifrado();
+            } finally {
+                globalThis.navigator = originalNav;
+            }
         });
 
         it('debe ocultar el botón de biometría si el usuario no la tiene registrada', () => {
@@ -282,8 +332,10 @@ describe('Interfaz y Modales Cero Conocimiento (Fase 2 - UI)', () => {
             guardarCredencialBiometrica('usr_bio_ok', { credentialId: 'AQIDBA==' });
             guardarPinBiometricoProtegido('usr_bio_ok', '9876');
 
-            // Simular navigator.credentials.get
+            // Simular teléfono móvil con navigator.credentials.get
             globalThis.navigator = {
+                userAgent: UA_IPHONE,
+                maxTouchPoints: 5,
                 credentials: {
                     get: vi.fn().mockResolvedValue({ id: 'ok' })
                 }
@@ -320,6 +372,8 @@ describe('Interfaz y Modales Cero Conocimiento (Fase 2 - UI)', () => {
             guardarPinBiometricoProtegido('usr_auto_bio', '1234');
 
             globalThis.navigator = {
+                userAgent: UA_IPHONE,
+                maxTouchPoints: 5,
                 credentials: {
                     get: vi.fn().mockResolvedValue({ id: 'ok' })
                 }
@@ -351,8 +405,10 @@ describe('Interfaz y Modales Cero Conocimiento (Fase 2 - UI)', () => {
             guardarCredencialBiometrica('usr_bio_fail', { credentialId: 'AQIDBA==' });
             guardarPinBiometricoProtegido('usr_bio_fail', '1234');
 
-            // Simular fallo o cancelación en navigator.credentials.get
+            // Simular fallo o cancelación en navigator.credentials.get en teléfono móvil
             globalThis.navigator = {
+                userAgent: UA_IPHONE,
+                maxTouchPoints: 5,
                 credentials: {
                     get: vi.fn().mockRejectedValue(new Error('User cancelled'))
                 }
@@ -388,6 +444,8 @@ describe('Interfaz y Modales Cero Conocimiento (Fase 2 - UI)', () => {
             guardarPinBiometricoProtegido('usr_bio_direct_fail', '1234');
 
             globalThis.navigator = {
+                userAgent: UA_IPHONE,
+                maxTouchPoints: 5,
                 credentials: {
                     get: vi.fn().mockRejectedValue(new Error('Hardware error'))
                 }

@@ -94,7 +94,7 @@
     </section>
 
     <!-- 2.B. Header Principal -->
-    <header class="bg-indigo-700 text-white p-4 shadow-md sticky top-0 z-50">
+    <header id="app-header" class="bg-indigo-700 text-white p-4 shadow-md sticky top-0 z-50">
         <div class="flex justify-between items-center max-w-md md:max-w-6xl lg:max-w-7xl mx-auto">
             <div>
                 <!-- El "v..." lo escribe db.js desde js/version.js. -->
@@ -132,8 +132,8 @@
         <!-- (movido a #tab-resumen, ver más abajo) -->
 
         <!-- Selector de Mes y Año con Navegación Directa -->
-        <!-- Sticky bajo el header (top-0 z-50): queda fijo al hacer scroll. -->
-        <div class="bg-white rounded-2xl p-4 shadow-sm border border-gray-200 sticky top-16 md:top-28 z-40">
+        <!-- Sticky bajo el header (top-0 z-50): queda fijo al hacer scroll mediante --offset-sticky-mes. -->
+        <div id="barra-selector-mes" class="bg-white rounded-2xl p-4 shadow-sm border border-gray-200 sticky z-40" style="top: var(--offset-sticky-mes, 76px);">
             <div class="flex justify-between items-center">
                 <button type="button" onclick="window.mesAnterior()" class="w-9 h-9 flex items-center justify-center bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl transition">
                     <i class="fa-solid fa-chevron-left text-xs"></i>
@@ -470,12 +470,63 @@
 
         <!-- 3.C. TAB 3: GASTOS -->
         <section id="tab-gastos" class="tab-content space-y-4">
+            <!-- Vista por Tarjetas Métricas de Gastos y Resultado del Mes -->
+            <div class="space-y-2.5">
+                <!-- Tarjeta destacada: Resultado del Mes (Ingresos - Egresos) -->
+                <div id="card-gastos-resultado" class="bg-emerald-50 border border-emerald-200 rounded-2xl p-3.5 md:p-4 shadow-sm flex items-center justify-between gap-3 transition-colors">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-9 h-9 rounded-xl bg-white/80 border border-black/5 flex items-center justify-center text-indigo-600 shrink-0">
+                            <i class="fa-solid fa-scale-balanced text-sm"></i>
+                        </span>
+                        <div>
+                            <span class="text-[11px] font-bold uppercase tracking-wider text-gray-600 block">Resultado del Mes</span>
+                            <span class="text-[10px] text-gray-500 block">Ingresos &minus; Egresos</span>
+                        </div>
+                    </div>
+                    <strong id="gastos-resultado-mes" class="font-mono text-lg md:text-xl font-black text-emerald-700 whitespace-nowrap">$ 0,00</strong>
+                </div>
+
+                <!-- Grilla responsiva de tarjetas compactas -->
+                <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+                    <div class="bg-white rounded-2xl p-3 shadow-sm border border-gray-200 flex flex-col justify-between">
+                        <span class="text-[10px] font-bold uppercase tracking-wider text-gray-500 flex items-center gap-1.5">
+                            <i class="fa-solid fa-arrow-trend-up text-indigo-500"></i> Ingresos
+                        </span>
+                        <strong id="gastos-sueldo-neto" class="font-mono text-sm md:text-base font-extrabold text-gray-900 mt-1">$ 0,00</strong>
+                    </div>
+                    <div class="bg-white rounded-2xl p-3 shadow-sm border border-gray-200 flex flex-col justify-between">
+                        <span class="text-[10px] font-bold uppercase tracking-wider text-gray-500 flex items-center gap-1.5">
+                            <i class="fa-solid fa-arrow-trend-down text-slate-600"></i> Egresos
+                        </span>
+                        <strong id="gastos-tot-general" class="font-mono text-sm md:text-base font-extrabold text-gray-900 mt-1">$ 0,00</strong>
+                    </div>
+                    <div class="bg-white rounded-2xl p-3 shadow-sm border border-emerald-200 flex flex-col justify-between">
+                        <span class="text-[10px] font-bold uppercase tracking-wider text-emerald-700 flex items-center gap-1.5">
+                            <i class="fa-solid fa-circle-check text-emerald-600"></i> Pagado
+                        </span>
+                        <strong id="gastos-tot-pagado" class="font-mono text-sm md:text-base font-extrabold text-emerald-700 mt-1">$ 0,00</strong>
+                    </div>
+                    <div class="bg-white rounded-2xl p-3 shadow-sm border border-rose-200 flex flex-col justify-between">
+                        <span class="text-[10px] font-bold uppercase tracking-wider text-rose-600 flex items-center gap-1.5">
+                            <i class="fa-solid fa-clock text-rose-500"></i> Pendiente
+                        </span>
+                        <strong id="gastos-tot-pendiente" class="font-mono text-sm md:text-base font-extrabold text-rose-600 mt-1">$ 0,00</strong>
+                    </div>
+                    <div class="col-span-2 sm:col-span-1 bg-white rounded-2xl p-3 shadow-sm border border-emerald-200 flex flex-col justify-between">
+                        <span class="text-[10px] font-bold uppercase tracking-wider text-gray-500 flex items-center gap-1.5">
+                            <i class="fa-solid fa-wallet text-emerald-600"></i> Disponible hoy
+                        </span>
+                        <strong id="gastos-saldo-disponible" class="font-mono text-sm md:text-base font-extrabold text-emerald-600 mt-1">$ 0,00</strong>
+                    </div>
+                </div>
+            </div>
+
             <div class="grid grid-cols-1 md:grid-cols-12 gap-4 md:gap-6">
-                <!-- Columna Izquierda: Controles, Totales y Formularios de Carga -->
+                <!-- Columna Izquierda: Controles y Formularios de Carga -->
                 <div class="md:col-span-5 lg:col-span-4 space-y-4">
                     <!-- Buscador y Acciones -->
-                    <!-- Sticky bajo el selector de mes (top-16 md:top-28 z-30); sólo en tab Gastos. -->
-                    <div class="bg-white rounded-2xl p-4 shadow-sm border border-gray-200 space-y-3 sticky top-16 md:top-28 z-30">
+                    <!-- Sticky sólo en desktop (md:sticky) para no superponerse en móvil con el selector de mes. -->
+                    <div class="bg-white rounded-2xl p-4 shadow-sm border border-gray-200 space-y-3 md:sticky z-30" style="top: var(--offset-sticky-gastos, 196px);">
                 <div class="flex items-center gap-2">
                     <div class="relative flex-1">
                         <input type="text" id="filtro-gastos" oninput="window.renderizarTodo()" placeholder="Buscar en gastos..." class="w-full pl-8 pr-8 py-2 text-xs border rounded-xl bg-gray-50">
@@ -640,15 +691,6 @@
                     <button type="submit" class="w-full py-3 bg-purple-600 text-white font-bold rounded-xl text-xs hover:bg-purple-700 transition">Guardar Plan</button>
                 </form>
             </div>
-
-                    <!-- Totales -->
-                    <div class="bg-white rounded-2xl p-4 shadow-sm border border-gray-200 space-y-2 text-xs">
-                        <div class="flex justify-between py-1"><span>Sueldo Neto:</span><strong id="gastos-sueldo-neto" class="font-mono">$ 0,00</strong></div>
-                        <div class="flex justify-between py-1"><span>Saldo Disponible:</span><strong id="gastos-saldo-disponible" class="font-mono text-emerald-600">$ 0,00</strong></div>
-                        <div class="flex justify-between py-1"><span>Total Gastos:</span><strong id="gastos-tot-general" class="font-mono">$ 0,00</strong></div>
-                        <div class="flex justify-between py-1 text-emerald-700"><span>Pagado:</span><strong id="gastos-tot-pagado" class="font-mono">$ 0,00</strong></div>
-                        <div class="flex justify-between py-1 text-rose-600"><span>Pendiente:</span><strong id="gastos-tot-pendiente" class="font-mono">$ 0,00</strong></div>
-                    </div>
                 </div>
 
                 <!-- Columna Derecha: Listas por Categoría -->
@@ -1200,7 +1242,7 @@
        4. NAVEGACIÓN Y CAPTURA DE ERRORES
        ========================================================= -->
     <!-- 4.A. Menú de Navegación -->
-    <nav class="fixed bottom-0 left-0 right-0 md:sticky md:top-14 md:bottom-auto md:border-b md:border-t-0 bg-white border-t border-gray-200 z-50 py-1 md:py-2 shadow-sm">
+    <nav id="app-nav" class="fixed bottom-0 left-0 right-0 md:sticky md:top-[var(--offset-sticky-nav,76px)] md:bottom-auto md:border-b md:border-t-0 bg-white border-t border-gray-200 z-50 py-1 md:py-2 shadow-sm">
         <div class="flex justify-around md:justify-center md:gap-6 lg:gap-10 items-center max-w-md md:max-w-6xl lg:max-w-7xl mx-auto text-[10px] md:text-xs">
             <button id="nav-resumen" onclick="window.cambiarTab('resumen')" class="flex flex-col md:flex-row md:gap-1.5 items-center justify-center text-indigo-600 focus:outline-none py-1 md:py-1.5 md:px-3 md:rounded-lg font-bold">
                 <i class="fa-solid fa-chart-pie text-base mb-0.5 md:mb-0"></i>

@@ -2258,6 +2258,28 @@ function renderizarDesgloseEgresos(gasCalc) {
 
 // 5.B.6. Renderizar totales de gastos
 function renderizarTotalesGastos(ingCalc, gasCalc) {
+    const resultadoMes = ingCalc.neto - gasCalc.total;
+    const resultadoEl = document.getElementById('gastos-resultado-mes');
+    const cardResultadoEl = document.getElementById('card-gastos-resultado');
+    const esPositivo = resultadoMes >= 0;
+
+    if (resultadoEl) {
+        resultadoEl.innerText = formatARS(resultadoMes);
+        resultadoEl.classList.remove('text-emerald-700', 'text-rose-700');
+        resultadoEl.classList.add(esPositivo ? 'text-emerald-700' : 'text-rose-700');
+    }
+    if (cardResultadoEl) {
+        cardResultadoEl.classList.remove(
+            'bg-emerald-50', 'border-emerald-200',
+            'bg-rose-50', 'border-rose-200'
+        );
+        if (esPositivo) {
+            cardResultadoEl.classList.add('bg-emerald-50', 'border-emerald-200');
+        } else {
+            cardResultadoEl.classList.add('bg-rose-50', 'border-rose-200');
+        }
+    }
+
     const gastosSueldoEl = document.getElementById('gastos-sueldo-neto');
     if (gastosSueldoEl) gastosSueldoEl.innerText = formatARS(ingCalc.neto);
     const gastosDispEl = document.getElementById('gastos-saldo-disponible');
@@ -4035,11 +4057,58 @@ async function asegurarMonitorEntorno() {
     return monitorEntorno.obtenerEstado();
 }
 
+let _stickyMesInicializado = false;
+
+function actualizarOffsetStickyMes() {
+    if (typeof document === 'undefined' || typeof window === 'undefined') return;
+    const header = document.getElementById('app-header') || document.querySelector('header');
+    if (!header) return;
+
+    const headerRect = header.getBoundingClientRect();
+    const headerHeight = Math.max(0, Math.round(headerRect.height));
+    document.documentElement.style.setProperty('--offset-sticky-nav', `${headerHeight}px`);
+
+    const esDesktop = window.innerWidth >= 768;
+    let navHeight = 0;
+
+    if (esDesktop) {
+        const nav = document.getElementById('app-nav') || document.querySelector('nav');
+        if (nav) {
+            navHeight = nav.getBoundingClientRect().height || 0;
+        }
+    }
+
+    const offsetMes = Math.max(0, Math.round(headerHeight + navHeight + 4));
+    document.documentElement.style.setProperty('--offset-sticky-mes', `${offsetMes}px`);
+
+    const selectorMes = document.getElementById('barra-selector-mes');
+    const selectorHeight = selectorMes ? (selectorMes.getBoundingClientRect().height || 0) : 0;
+    const offsetGastos = Math.max(offsetMes, Math.round(offsetMes + selectorHeight + 8));
+    document.documentElement.style.setProperty('--offset-sticky-gastos', `${offsetGastos}px`);
+}
+
+function inicializarStickyMes() {
+    if (typeof document === 'undefined' || typeof window === 'undefined') return;
+    actualizarOffsetStickyMes();
+    if (_stickyMesInicializado) return;
+    _stickyMesInicializado = true;
+
+    window.addEventListener('resize', actualizarOffsetStickyMes);
+    const header = document.getElementById('app-header') || document.querySelector('header');
+    if (header && typeof ResizeObserver !== 'undefined') {
+        try {
+            const ro = new ResizeObserver(() => actualizarOffsetStickyMes());
+            ro.observe(header);
+        } catch (_) {}
+    }
+}
+
 // 7.A. Función principal de inicio
 export async function initApp() {
     if (inicializandoApp) return;
     inicializandoApp = true;
     try {
+        inicializarStickyMes();
         const estadoEntorno = await asegurarMonitorEntorno();
         if (estadoEntorno?.bloqueado) {
             actualizarUIBloqueoEntorno(estadoEntorno);
@@ -4113,6 +4182,7 @@ export async function initApp() {
         }
 
         ocultarPantallaLogin();
+        actualizarOffsetStickyMes();
 
         if (db && db.mesActivo) {
             asegurarAnioEnSelect(db.mesActivo.split('-')[0]);
