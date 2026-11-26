@@ -95,13 +95,13 @@
 
     <!-- 2.B. Header Principal -->
     <header id="app-header" class="bg-indigo-700 text-white p-4 shadow-md sticky top-0 z-50">
-        <div class="flex justify-between items-center max-w-md md:max-w-6xl lg:max-w-7xl mx-auto">
-            <div>
+        <div class="flex justify-between items-center gap-2 max-w-md md:max-w-6xl lg:max-w-7xl mx-auto">
+            <div class="min-w-0">
                 <!-- El "v..." lo escribe db.js desde js/version.js. -->
-                <h1 id="app-title-header" class="text-base md:text-xl font-bold">Mis Finanzas</h1>
-                <p class="text-[11px] md:text-xs text-indigo-200" id="current-date-label">Cargando fecha...</p>
+                <h1 id="app-title-header" class="text-base md:text-xl font-bold leading-tight break-words">Mis Finanzas</h1>
+                <p class="text-[11px] md:text-xs text-indigo-200 leading-snug break-words" id="current-date-label">Cargando fecha...</p>
             </div>
-            <div class="flex items-center space-x-2 md:space-x-3">
+            <div class="flex items-center space-x-2 md:space-x-3 shrink-0">
                 <button id="btn-toggle-vista" onclick="window.toggleModoVista()" type="button" class="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 transition" title="Cambiar modo de vista (Celular / Escritorio)" aria-label="Cambiar modo de vista (Celular / Escritorio)">
                     <i id="icono-toggle-vista" class="fa-solid fa-mobile-screen"></i>
                 </button>

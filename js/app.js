@@ -244,6 +244,8 @@ export function aplicarModoVista(modo) {
         console.warn('[app] No se pudo guardar preferencia de vista:', e);
     }
 
+    programarActualizacionOffsetStickyMes();
+
     return modoFinal;
 }
 
@@ -4065,7 +4067,7 @@ function actualizarOffsetStickyMes() {
     if (!header) return;
 
     const headerRect = header.getBoundingClientRect();
-    const headerHeight = Math.max(0, Math.round(headerRect.height));
+    const headerHeight = Math.max(0, Math.ceil(Math.max(headerRect.height || 0, header.offsetHeight || 0)));
     document.documentElement.style.setProperty('--offset-sticky-nav', `${headerHeight}px`);
 
     const esDesktop = window.innerWidth >= 768;
@@ -4074,32 +4076,49 @@ function actualizarOffsetStickyMes() {
     if (esDesktop) {
         const nav = document.getElementById('app-nav') || document.querySelector('nav');
         if (nav) {
-            navHeight = nav.getBoundingClientRect().height || 0;
+            const navRect = nav.getBoundingClientRect();
+            navHeight = Math.max(0, Math.ceil(Math.max(navRect.height || 0, nav.offsetHeight || 0)));
         }
     }
 
-    const offsetMes = Math.max(0, Math.round(headerHeight + navHeight + 4));
+    const offsetMes = Math.max(0, Math.ceil(headerHeight + navHeight + 4));
     document.documentElement.style.setProperty('--offset-sticky-mes', `${offsetMes}px`);
 
     const selectorMes = document.getElementById('barra-selector-mes');
-    const selectorHeight = selectorMes ? (selectorMes.getBoundingClientRect().height || 0) : 0;
-    const offsetGastos = Math.max(offsetMes, Math.round(offsetMes + selectorHeight + 8));
+    const selectorRect = selectorMes ? selectorMes.getBoundingClientRect() : null;
+    const selectorHeight = selectorMes
+        ? Math.max(0, Math.ceil(Math.max(selectorRect?.height || 0, selectorMes.offsetHeight || 0)))
+        : 0;
+    const offsetGastos = Math.max(offsetMes, Math.ceil(offsetMes + selectorHeight + 8));
     document.documentElement.style.setProperty('--offset-sticky-gastos', `${offsetGastos}px`);
+}
+
+function programarActualizacionOffsetStickyMes() {
+    actualizarOffsetStickyMes();
+    if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => actualizarOffsetStickyMes());
+    }
 }
 
 function inicializarStickyMes() {
     if (typeof document === 'undefined' || typeof window === 'undefined') return;
-    actualizarOffsetStickyMes();
+    programarActualizacionOffsetStickyMes();
     if (_stickyMesInicializado) return;
     _stickyMesInicializado = true;
 
-    window.addEventListener('resize', actualizarOffsetStickyMes);
+    window.addEventListener('resize', programarActualizacionOffsetStickyMes);
     const header = document.getElementById('app-header') || document.querySelector('header');
     if (header && typeof ResizeObserver !== 'undefined') {
         try {
-            const ro = new ResizeObserver(() => actualizarOffsetStickyMes());
+            const ro = new ResizeObserver(() => programarActualizacionOffsetStickyMes());
             ro.observe(header);
         } catch (_) {}
+    }
+
+    if (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function') {
+        document.fonts.ready
+            .then(() => programarActualizacionOffsetStickyMes())
+            .catch(() => {});
     }
 }
 
@@ -4127,6 +4146,7 @@ export async function initApp() {
         if (dateEl) {
             dateEl.innerText = fechaObj.toLocaleDateString('es-AR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
         }
+        programarActualizacionOffsetStickyMes();
 
         const estado = document.getElementById('debug-app-status');
         if (estado) estado.textContent = 'Cargando datos de la sesión…';
@@ -4182,7 +4202,7 @@ export async function initApp() {
         }
 
         ocultarPantallaLogin();
-        actualizarOffsetStickyMes();
+        programarActualizacionOffsetStickyMes();
 
         if (db && db.mesActivo) {
             asegurarAnioEnSelect(db.mesActivo.split('-')[0]);
