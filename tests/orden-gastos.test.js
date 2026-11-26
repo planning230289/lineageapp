@@ -325,5 +325,37 @@ describe('ordenarGastosPorCriterio y ordenarYReplicarHaciaAdelante', () => {
         expect(ordenarYReplicarHaciaAdelante({}, '')).toEqual({ cambioMesActual: false, mesesReordenados: 0 });
         expect(ordenarYReplicarHaciaAdelante({ '2026-04': null }, '2026-04')).toEqual({ cambioMesActual: false, mesesReordenados: 0 });
     });
+
+    it('ordena conceptos con números y cuotas de forma natural en az y en desempate de monto-desc y monto-asc', () => {
+        const cuotasAz = [
+            { id: 'c-11', concepto: 'Notebook (Cuota 11/12)', categoria: 'Cuotas', monto: 50000 },
+            { id: 'c-3', concepto: 'Notebook (Cuota 3/12)', categoria: 'Cuotas', monto: 30000 },
+            { id: 'c-10', concepto: 'Item 10', categoria: 'Fijos', monto: 20000 },
+            { id: 'c-2', concepto: 'Item 2', categoria: 'Fijos', monto: 10000 }
+        ];
+
+        expect(ordenarGastosPorCriterio(cuotasAz, 'az')).toBe(true);
+        expect(cuotasAz.map(g => g.id)).toEqual(['c-3', 'c-11', 'c-2', 'c-10']);
+
+        const empateMontoDesc = [
+            { id: 'c-11', concepto: 'Notebook (Cuota 11/12)', categoria: 'Cuotas', monto: 25000 },
+            { id: 'c-3', concepto: 'Notebook (Cuota 3/12)', categoria: 'Cuotas', monto: 25000 },
+            { id: 'f-10', concepto: 'Servicio 10', categoria: 'Fijos', monto: 15000 },
+            { id: 'f-2', concepto: 'Servicio 2', categoria: 'Fijos', monto: 15000 }
+        ];
+
+        expect(ordenarGastosPorCriterio(empateMontoDesc, 'monto-desc')).toBe(true);
+        expect(empateMontoDesc.map(g => g.id)).toEqual(['c-3', 'c-11', 'f-2', 'f-10']);
+
+        const empateMontoAsc = [
+            { id: 'c-11', concepto: 'Notebook (Cuota 11/12)', categoria: 'Cuotas', monto: 25000 },
+            { id: 'c-3', concepto: 'Notebook (Cuota 3/12)', categoria: 'Cuotas', monto: 25000 },
+            { id: 'f-10', concepto: 'Servicio 10', categoria: 'Fijos', monto: 15000 },
+            { id: 'f-2', concepto: 'Servicio 2', categoria: 'Fijos', monto: 15000 }
+        ];
+
+        expect(ordenarGastosPorCriterio(empateMontoAsc, 'monto-asc')).toBe(true);
+        expect(empateMontoAsc.map(g => g.id)).toEqual(['c-3', 'c-11', 'f-2', 'f-10']);
+    });
 });
 

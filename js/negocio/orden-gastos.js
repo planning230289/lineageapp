@@ -23,6 +23,17 @@ function esObjetoPlano(valor) {
 }
 
 /**
+ * Compara dos conceptos usando ordenamiento natural (numérico y sin distinción de base/mayúsculas).
+ *
+ * @param {string} a Primer concepto
+ * @param {string} b Segundo concepto
+ * @returns {number} Resultado de comparación (< 0, 0, > 0)
+ */
+function compararConceptosNatural(a, b) {
+    return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+}
+
+/**
  * Construye una clave estable de identidad para emparejar el mismo
  * gasto o plan de cuotas entre meses distintos.
  *
@@ -183,12 +194,15 @@ export function ordenarGastosPorCriterio(lista, criterio = 'monto-desc') {
         const ordenadas = entradas.slice().sort((a, b) => {
             if (modo === 'monto-desc') {
                 if (b.monto !== a.monto) return b.monto - a.monto;
-                if (a.concepto !== b.concepto) return a.concepto.localeCompare(b.concepto);
+                const cmpConcepto = compararConceptosNatural(a.concepto, b.concepto);
+                if (cmpConcepto !== 0) return cmpConcepto;
             } else if (modo === 'monto-asc') {
                 if (a.monto !== b.monto) return a.monto - b.monto;
-                if (a.concepto !== b.concepto) return a.concepto.localeCompare(b.concepto);
+                const cmpConcepto = compararConceptosNatural(a.concepto, b.concepto);
+                if (cmpConcepto !== 0) return cmpConcepto;
             } else if (modo === 'az') {
-                if (a.concepto !== b.concepto) return a.concepto.localeCompare(b.concepto);
+                const cmpConcepto = compararConceptosNatural(a.concepto, b.concepto);
+                if (cmpConcepto !== 0) return cmpConcepto;
                 if (b.monto !== a.monto) return b.monto - a.monto;
             }
             return a.indiceOriginal - b.indiceOriginal;
